@@ -3,3 +3,6 @@
 
 /boot/Cargo.lock
 /kern/Cargo.lock
+
+# for testing purposes
+/boot0.bin
