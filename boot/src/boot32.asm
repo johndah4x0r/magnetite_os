@@ -120,12 +120,6 @@ panicb:
     cli                         ; Kill interrupts
     hlt
 
-; end of 32-bit code - start of 64-bit code
-[bits 64]
-section .text.boot64
-_boot64:
-
-
 ; separating text from data isn't that
 ; crucial in binary executables, but
 ; it is best practice (we'll merge
