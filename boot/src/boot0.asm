@@ -297,6 +297,7 @@ pm:
     call stage_2
 
     ; Halt (unreachable)
+    cli
     hlt
 
 ; Variables
