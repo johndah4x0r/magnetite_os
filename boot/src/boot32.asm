@@ -60,8 +60,8 @@ _preamble:
     jmp dword _boot32
     nop
 
-    ; Align preamble to 16 B
-    times 16-($-$$) nop
+    ; Align preamble to 8 B
+    times 8-($-$$) nop
 
 ; ---- context ---- ;
 ; - we intend to place .hal_vt
@@ -82,13 +82,11 @@ _boot32:
                                 ; rather than jump to it.
 
     pop eax                     ; pop BPB location
-    pop ebx                     ; pop active text mode
-    pop ecx                     ; pop boot device number
+    pop ebx                     ; pop boot device number
 
     ; Store them locally
     mov [oem_label.low], eax    ; BPB location
-    mov [textmode.low], ebx     ; active text mode
-    mov [bootdev.low], ecx      ; boot device number
+    mov [bootdev.low], ebx      ; boot device number
 
     ; Reset stack to 0x7b00
     mov esp, 0x7b00
