@@ -1,34 +1,37 @@
-.PHONY: all clean
-	# Boo!
+BUILD_DIR := build
+BOOT_SRC := boot/src
 
-all: mbr.bin boot1.bin
+.DEFAULT_GOAL := all
+.PHONY: all clean
+
+all: $(BUILD_DIR) $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/boot1.bin
 
 clean:
-	# FIXME: This is *extremely* dangerous!
-	rm -f boot*.bin boot*.o mbr.bin
+	rm -r $(BUILD_DIR)
 
-(boot/src/mbr.asm boot/src/stub32.asm boot/src/stu64.asm): Makefile
+$(BUILD_DIR):
+	mkdir -p $@
 
-mbr.bin: boot/src/mbr.asm
-	nasm boot/src/mbr.asm -f bin -o mbr.bin 
+$(BUILD_DIR)/mbr.bin: $(BOOT_SRC)/mbr.asm
+	nasm $(BOOT_SRC)/mbr.asm -f bin -o $(BUILD_DIR)/mbr.bin 
 
-stub32.o: boot/src/stub32.asm
-	nasm boot/src/stub32.asm -f elf32 -o stub32.o
+$(BUILD_DIR)/stub32.o: $(BOOT_SRC)/stub32.asm
+	nasm $(BOOT_SRC)/stub32.asm -f elf32 -o $(BUILD_DIR)/stub32.o
 
 
-stub64.o: boot/src/stub64.asm
-	nasm boot/src/stub64.asm -f elf64 -o stub64.o 
+$(BUILD_DIR)/stub64.o: $(BOOT_SRC)/stub64.asm
+	nasm $(BOOT_SRC)/stub64.asm -f elf64 -o $(BUILD_DIR)/stub64.o 
 
 # TODO:
 # - add Rust bootloader object as dependency
 # - use proper linker script
-boot64.bin: stub64.o
+$(BUILD_DIR)/boot64.bin: $(BUILD_DIR)/stub64.o
 	# TODO
-	nasm boot/src/stub64.asm -f bin -o boot64.bin
+	nasm $(BOOT_SRC)/stub64.asm -f bin -o $(BUILD_DIR)/boot64.bin
 
-boot64_wrap.o: boot64.bin
-	ld -r -m elf_i386 -b binary boot64.bin -o boot64_wrap.o;
-	objcopy --rename-section .data=.w_text boot64_wrap.o
+$(BUILD_DIR)/boot64_wrap.o: $(BUILD_DIR)/boot64.bin
+	ld -r -m elf_i386 -b binary $(BUILD_DIR)/boot64.bin -o $(BUILD_DIR)/boot64_wrap.o;
+	objcopy --rename-section .data=.w_text $(BUILD_DIR)/boot64_wrap.o
 
-boot1.bin: stub32.o boot64_wrap.o
-	ld -m elf_i386 -T link_boot1.ld --oformat=binary stub32.o boot64_wrap.o -o boot1.bin
+$(BUILD_DIR)/boot1.bin: $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64_wrap.o
+	ld -m elf_i386 -T link_boot1.ld --oformat=binary $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64_wrap.o -o $(BUILD_DIR)/boot1.bin
