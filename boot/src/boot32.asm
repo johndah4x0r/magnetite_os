@@ -3,7 +3,7 @@
 ; Do not use absolute positioning, as the
 ; binaries are linked at a later stage
 
-extern _binary_boot64_bin_start     ; Wrapped 64-bit code label
+extern _start                       ; Wrapped 64-bit code label
 
 ; Flags for later use
 ID_EFLAGS       equ 0x00200000      ; EFLAGS ID bit
@@ -52,26 +52,7 @@ SEG_GRAN_4K       equ 1 << 7
 SEG_SZ_32         equ 1 << 6
 SEG_LONG_MODE     equ 1 << 5
 
-
-; Preamble section
-section .preamble
-_preamble:
-    ; Reuse legacy magic sequence
-    jmp dword _boot32
-    nop
-
-    ; Align preamble to 8 B
-    times 8-($-$$) nop
-
-; ---- context ---- ;
-; - we intend to place .hal_vt
-;   in between .preamble and
-;   .boot32
-; - the vector list can be defined
-;   in .data, so long as the
-;   kernel can locate it later
-
-section .boot32
+section .text
 _boot32:
     ; Kill interrupts (if they are still active)
     cli
@@ -211,7 +192,7 @@ enable_lm:
 
     ; Load 64-bit GDT and perform far jump
     lgdt [gdt64.pointer]
-    jmp gdt64.code:_binary_boot64_bin_start
+    jmp gdt64.code:_start
 
     ; Halt in the event of a failure
     ; (unreachable)
@@ -269,7 +250,7 @@ panicb:
 ; crucial in binary executables, but
 ; it is best practice (we'll merge
 ; them anyways during linking)
-section .data.preboot
+section .data
 
 ; 64-bit GDT
 gdt64:
