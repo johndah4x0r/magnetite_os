@@ -4,7 +4,7 @@
 ; binaries are linked at a later stage
 global _start
 
-section .text.boot64
+section .boot64
 
 ; Use '_start' to appease linker, and to
 ; assert the importance of this stub for
@@ -12,4 +12,5 @@ section .text.boot64
 _start:
     ; TODO
     cli
+    xchg rbx, rbx
     hlt

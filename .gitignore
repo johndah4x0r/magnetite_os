@@ -6,6 +6,7 @@
 
 # for testing purposes
 /boot0.bin
+/boot1.bin
 /boot64.bin
 /boot_rs.o
 /boot32.o
