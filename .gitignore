@@ -5,10 +5,5 @@
 /kern/Cargo.lock
 
 # for testing purposes
-/boot0.bin
-/boot1.bin
-/boot64.bin
-/boot_rs.o
-/boot32.o
-/boot64.o
-/boot64_wrap.o
+*.bin
+*.o
