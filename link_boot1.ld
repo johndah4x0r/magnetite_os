@@ -15,7 +15,6 @@ SECTIONS {
             Alias start of 'boot64.bin' 
             Highly sensitive to source path
         */
-        _start = _binary_build_boot64_bin_start;
 
         *(.text .text.*)
         *(.data .data.*)
