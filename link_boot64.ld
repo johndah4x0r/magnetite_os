@@ -1,6 +1,6 @@
 /*
     Linker script for stitching together
-    'boot64.o' and 'boot_rs.o' into
+    'stub64.o' and 'boot_rs.o' into
     'boot64.bin'
 */
 
@@ -9,7 +9,7 @@ ENTRY(_start)            /* make sure _start exists */
 SECTIONS {
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
-        *(.boot64)
+        *(.stub64)
 
         . = ALIGN(16);
         *(.hal)
