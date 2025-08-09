@@ -31,7 +31,9 @@ $(BUILD_DIR)/boot64.bin: $(BUILD_DIR)/stub64.o
 
 $(BUILD_DIR)/boot64_wrap.o: $(BUILD_DIR)/boot64.bin
 	ld -r -m elf_i386 -b binary $(BUILD_DIR)/boot64.bin -o $(BUILD_DIR)/boot64_wrap.o;
-	objcopy --rename-section .data=.w_text $(BUILD_DIR)/boot64_wrap.o
+	objcopy -S --rename-section .data=.w_text $(BUILD_DIR)/boot64_wrap.o;
+	objcopy -S --add-symbol _start=.w_text:0 $(BUILD_DIR)/boot64_wrap.o
+
 
 $(BUILD_DIR)/boot1.bin: $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64_wrap.o
 	ld -m elf_i386 -T link_boot1.ld --oformat=binary $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64_wrap.o -o $(BUILD_DIR)/boot1.bin
