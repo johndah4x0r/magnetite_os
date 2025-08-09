@@ -11,8 +11,11 @@ SECTIONS {
 
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
-        /* alias start of 'boot64.bin' */
-        _start = _binary_boot64_bin_start;
+        /* 
+            Alias start of 'boot64.bin' 
+            Highly sensitive to source path
+        */
+        _start = _binary_build_boot64_bin_start;
 
         *(.text .text.*)
         *(.data .data.*)
