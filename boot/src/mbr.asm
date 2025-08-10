@@ -6,9 +6,10 @@
 ; Initialize the system, load second stage into 0x8000,
 ; enable protected mode and transfer control to second stage.
 ; 
-; Boot parameters can be found in 'params' (0x7e00).
-; - parameters are 16-bit values, which must
-;   be aligned for FFI compatibility
+; Boot parameters are passed using a cdecl-like ABI.
+; - This isn't strictly necessary, as we *do* control
+;   the contract between the MBR and the second-stage
+;   loader.
 ;
 ; Low Memory is used as follows:
 ; * 0x00500-0x07af0 - stack (to be relocated)
@@ -41,7 +42,7 @@ BytesPerSector:
 SectorsPerCluster:
     db 4
 ReservedSectors:
-    dw 12
+    dw 13
 FatCount:
     db 2
 RootDirEntries:
@@ -100,11 +101,11 @@ _start:
     sti
 
     ; - Store device number here - ;
+    mov [bootdev], dl
     cmp dl, 0
     je .next
 
     ; Find storage device geometry
-    mov [bootdev], dl
     mov ah, 8
     int 0x13
     jc panic
@@ -122,6 +123,7 @@ e820_scan:
     xchg bx, bx                             ; Breakpoint
     push edi                                ; Save EDI
 .lma:
+    ; Perform LMA check (wiki.osdev.org)
     clc                                     ; Clear carry flag
     int 0x12                                ; Check LMA size using BIOS
     jc panic                                ; Do not proceed if memory
@@ -133,8 +135,9 @@ e820_scan:
     jl panic                                ; Do not proceed if LMA is
                                             ; smaller than 128 kB
 
-    lea edi, [ADDR_E820_MAP + 4]            ; Store map at ADDR_E820_MAP + 4
+    lea edi, [ADDR_E820_MAP + 8]            ; Store map at ADDR_E820_MAP + 8
     xor esi, esi                            ; Zero entry count
+    xor ebx, ebx                            ; Zero EBX
 .seek:
     xchg bx, bx                             ; Breakpoing
     cmp esi, 1024                           ; Do not proceed beyond
@@ -146,9 +149,9 @@ e820_scan:
     mov edx, 0x534D4150                     ; String: 'SMAP'
     mov ecx, 24                             ; Ask for 24-byte entries
     int 0x15                                ; Call BIOS
-    jc .end                                 ; We're done already...
-    cmp eax, 0x534D4150                     ; String : 'SMAP'
-    jne .end                                ; We're also done already...
+    jc .cleanup                             ; We're done already...
+    cmp eax, 0x534D4150                     ; String: 'SMAP'
+    jne .cleanup                            ; We're also done already...
 
     pop edi                                 ; Restore EDI
     add edi, 24                             ; Move EDI to the next 24-byte slot
@@ -156,19 +159,29 @@ e820_scan:
     test ebx, ebx                           ; Test completion flag
     jnz .seek                               ; Continue if not complete
     ; --- fall-through --- ;
-
+.cleanup:
+    pop edi
+    jmp .end
 .end:
-    mov [0x9800], esi                       ; Store entry count
+    ; Store zero-extended entry count
+    ; - If entry counts were to exceed
+    ; 2**32 - 1 (which shouldn't happen),
+    ; then something's already wrong, and
+    ; missing other areas wouldn't be the
+    ; worst of our problems
+    mov [ADDR_E820_MAP], esi                ; Store entry count
+    xor esi, esi
+    mov [ADDR_E820_MAP + 4], esi            ; Zero-extend
     pop edi                                 ; Restore EDI
 
 ; Load second stage from the reserved sectors
 read_s2:
     ; now what do I do?
-    xchg bx, bx
-    xor eax, eax
-    xor edx, edx
+    xchg bx, bx                             ; Breakpoint
+    xor eax, eax                            ; Zero EAX
+    xor edx, edx                            ; Zero EDX
 
-    ; Expect >= 6 kB (>= 12 conventional sectors)
+    ; Expect >= 6.5 kB (>= 13 conventional sectors)
     mov ax, [ReservedSectors]               ; Get reserved sectors count
     mov dx, [BytesPerSector]                ; Get sector size
     mul dx                                  ; Get reserved area size (DX:AX)
@@ -177,7 +190,7 @@ read_s2:
 
     ; Check lower half (AX * 1 B)
     shr ax, 9                               ; Divide reserved area size by 512 B
-    cmp ax, 12                              ; Check quotient
+    cmp ax, 13                              ; Check quotient
     jl panic                                ; Panic if the reserved area is too small
     ; - fall-through - ;
 
@@ -191,16 +204,26 @@ read_s2:
     int 0x13                                ; Call BIOS
     jc panic                                ; Panic on failure
 
+; ---- TODO ---- ;
+; In future designs, memory layout scanning,
+; initialization and 32-bit mode operation
+; may be contained in a separate file loaded
+; from a FAT16 volume.
+; --- [TODO] --- ;
+
 ; Enable A20 gate - fast
 fast_a20:
+    xchg bx, bx
     in al, 0x92                             ; Read from port 0x92
     test al, 2                              ; Check if A20 is already enabled
     jnz .fast_a20_after
     or al, 2                                ; Set A20 bit
     and al, 0xfe                            ; Clear fast reset bit
     out 0x92, al                            ; Write to port 0x92
+    pause                                   ; Pause (or 'rep nop' in older CPUs)
+    jmp fast_a20                            ; Verify that the A20 get is set
 .fast_a20_after:
-    xchg bx, bx                              ; Breakpoint in Bochs 
+    xchg bx, bx                             ; Breakpoint in Bochs 
 
 ; Enter 32-bit protected mode
 enter_pm:
@@ -212,11 +235,11 @@ enter_pm:
     mov cr0, eax                            ; Write back to CR0
 
     ; Perform far jump to segment 0x08 (described in the GDT)
-    jmp 0x08:pm
+    jmp gdt.kern_cs:pm
 
     ; --- wishfull fall-through --- ;
 panic:
-    xchg bx, bx                              ; Breakpoint in Bochs
+    xchg bx, bx                             ; Breakpoint in Bochs
 
     ; Write error string to screen
     mov ah, 0x0e                            ; BIOS teletype function
@@ -240,11 +263,11 @@ panic:
     int 0x00
 
 [bits 32]
-align 32, nop
+align 16, nop
 
 pm:
     xchg bx, bx
-    mov eax, 0x10                           ; Point to kernel data segment
+    mov eax, gdt.kern_ds                    ; Point to kernel data segment
 
     ; - Set data segments
     mov ds, ax
@@ -272,6 +295,9 @@ pm:
     lea eax, [OemLabel]                     ; Store BPB location
     push eax
 
+    lea eax, [ADDR_E820_MAP]                ; Store E820 map location
+    push eax
+
     ; Perform near call to loaded program
     lea eax, [ADDR_S2_LDR]
     call eax
@@ -282,7 +308,7 @@ pm:
 
 ; Variables
 bootdev     db 0    ; Boot device (used predominantly by the BIOS)
-errmsg      db "Boot failed. Replace boot device and press any key to restart.", 0
+errmsg      db "Boot failed. Replace boot device and reset.", 0
 
 ; Structures
 ; - Global descriptor table
