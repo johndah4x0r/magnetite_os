@@ -15,6 +15,7 @@
 ; * 0x00500-0x07af0 - stack (to be relocated)
 ; * 0x07b00-0x07bff - guard region (not enforced)
 ; * 0x07c00-0x07dff - MBR
+; * 0x07e00-0x07fff - read buffer
 ; * 0x08000-0x097ff - second-stage loader
 ; * 0x09800-0x0ffff - E820 memory map
 ;   (+0x00: 64-bit base)
@@ -121,132 +122,39 @@ _start:
     ; - fall-through - ;
 .next:
 
-; Scan for memory using E820
-e820_scan:
+; TODO: make self-contained MBR
+
+; Calculate where the root directory and
+; the data are located
+compute_sectors:
     xchg bx, bx                             ; Breakpoint
-    push edi                                ; Save EDI
-.lma:
-    ; Perform LMA check (wiki.osdev.org)
-    clc                                     ; Clear carry flag
-    int 0x12                                ; Check LMA size using BIOS
-    jc panic                                ; Do not proceed if memory
-                                            ; size cannot be assessed
 
-    cmp ax, 128                             ; Make sure we have at least 
-                                            ; 128 kB of continuous memory
+    ; Calculate number of root directory sectors
+    ; FIXME: This may crash in Bochs
+    xor ax, ax
+    xor bx, bx
 
-    jl panic                                ; Do not proceed if LMA is
-                                            ; smaller than 128 kB
+    mov ax, [RootDirEntries]                ; Store number of root directory entries
+    shl ax, 5                               ; Multiply it by 32
+    mov bx, [BytesPerSector]                ; Store sector size
+    div bx                                  ; Divide AX by sector size
 
-    lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
-    xor esi, esi                            ; Zero entry count
-    xor ebx, ebx                            ; Zero EBX
-.seek:
-    xchg bx, bx                             ; Breakpoing
-    cmp esi, 1024                           ; Do not proceed beyond
-                                            ; 1024 entries
-    jge .end                                ; - skip if true
+    mov [RootDirSectors], ax                ; Store result
+    xor dx, dx                              ; (ignore remainder)
 
-    push edi                                ; Save EDI
-    mov eax, 0xe820                         ; Set call number
-    mov edx, 0x534D4150                     ; String: 'SMAP'
-    mov ecx, 24                             ; Ask for 24-byte entries
-    int 0x15                                ; Call BIOS
-    jc .cleanup                             ; We're done already...
-    cmp eax, 0x534D4150                     ; String: 'SMAP'
-    jne .cleanup                            ; We're also done already...
+    ; Calculate first root directory sector
+    mov ax, [SectorsPerTab]                 ; Store FAT size
+    mov bx, [FatCount]                      ; Multiply it by the FAT count
+    mul bx                                  ; (here)
 
-    pop edi                                 ; Restore EDI
-    add edi, 24                             ; Move EDI to the next 24-byte slot
-    inc esi                                 ; Increase entry count
-    test ebx, ebx                           ; Test completion flag
-    jnz .seek                               ; Continue if not complete
-    ; --- fall-through --- ;
-.cleanup:
-    pop edi
-    jmp .end
-.end:
-    ; Store zero-extended base and entry count
-    ; - If entry counts were to exceed
-    ; 2**32 - 1 (which shouldn't happen),
-    ; then something's already wrong, and
-    ; missing other areas wouldn't be the
-    ; worst of our problems
-    lea ebx, [ADDR_E820_MAP + 16]           ; Calculate array base
-    mov [ADDR_E820_MAP], ebx                ; Store array base
-    xor ebx, ebx
-    mov [ADDR_E820_MAP + 4], ebx            ; Zero-extend
+    mov [FirstRootDirSector], ax            ; Store result
+    xor dx, dx                              ; (ignore remainder)
 
-    mov [ADDR_E820_MAP + 8], esi            ; Store entry count
-    xor esi, esi
-    mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
+    ; Calculate first data sector
+    add ax, [RootDirSectors]                ; Add number of root directory sectors
+    mov [FirstDataSector], ax               ; Store result
 
-    pop edi                                 ; Restore EDI
-
-; Load second stage from the reserved sectors
-read_s2:
-    ; now what do I do?
-    xchg bx, bx                             ; Breakpoint
-    xor eax, eax                            ; Zero EAX
-    xor edx, edx                            ; Zero EDX
-
-    ; Expect >= 6.5 kB (>= 13 conventional sectors)
-    mov ax, [ReservedSectors]               ; Get reserved sectors count
-    mov dx, [BytesPerSector]                ; Get sector size
-    mul dx                                  ; Get reserved area size (DX:AX)
-    cmp dx, 0                               ; Check upper half (DX * 64 kB)
-    jnz .read_s2_cont                       ; Skip process if the reserved area is obviously large (>= 64 kB)
-
-    ; Check lower half (AX * 1 B)
-    shr ax, 9                               ; Divide reserved area size by 512 B
-    cmp ax, 13                              ; Check quotient
-    jl panic                                ; Panic if the reserved area is too small
-    ; - fall-through - ;
-
-.read_s2_cont:
-    ; Read 12 conventional sectors
-    lea bx, [ADDR_S2_LDR]                   ; Point BIOS to buffer at ADDR_S2_LDR
-    mov ax, 0x020c                          ; Read 12 sectors
-    mov cx, 0x0002                          ; Read from LBA 1 (C0, S2)
-    mov dh, 0                               ; Read from head 0
-    mov dl, [bootdev]                       ; Read from boot device
-    int 0x13                                ; Call BIOS
-    jc panic                                ; Panic on failure
-
-; ---- TODO ---- ;
-; In future designs, memory layout scanning,
-; initialization and 32-bit mode operation
-; may be contained in a separate file loaded
-; from a FAT16 volume.
-; --- [TODO] --- ;
-
-; Enable A20 gate - fast
-fast_a20:
-    xchg bx, bx
-    in al, 0x92                             ; Read from port 0x92
-    test al, 2                              ; Check if A20 is already enabled
-    jnz .fast_a20_after
-    or al, 2                                ; Set A20 bit
-    and al, 0xfe                            ; Clear fast reset bit
-    out 0x92, al                            ; Write to port 0x92
-    pause                                   ; Pause (or 'rep nop' in older CPUs)
-    jmp fast_a20                            ; Verify that the A20 get is set
-.fast_a20_after:
-    xchg bx, bx                             ; Breakpoint in Bochs 
-
-; Enter 32-bit protected mode
-enter_pm:
-    ; Here we go...
-    cli                                     ; Kill interrupts
-    lgdt [gdtr]                             ; Load GDT address
-    mov eax, cr0                            ; Read control register 0
-    or eax, 1                               ; Set PE bit 
-    mov cr0, eax                            ; Write back to CR0
-
-    ; Perform far jump to segment 0x08 (described in the GDT)
-    jmp gdt.kern_cs:pm
-
-    ; --- wishfull fall-through --- ;
+; --- Routines --- ;
 panic:
     xchg bx, bx                             ; Breakpoint in Bochs
 
@@ -254,7 +162,6 @@ panic:
     mov ah, 0x0e                            ; BIOS teletype function
     mov si, errmsg                          ; Point to error message
     sti                                     ; Enable all interrupts
-
 .cont:
     lodsb                                   ; Read 1 byte from SI, then shift
     cmp al, 0                               ; End of string (zero-terminated)
@@ -271,85 +178,15 @@ panic:
     lidt [0x7b00]
     int 0x00
 
-[bits 32]
-align 16, nop
-
-pm:
-    xchg bx, bx
-    mov eax, gdt.kern_ds                    ; Point to kernel data segment
-
-    ; - Set data segments
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    ; - reset stack
-    mov ss, ax                              ; Set stack segment register
-    mov esp, 0x7b00                         ; Reset stack pointer
-
-    ; TODO: brief pre-jump checklist
-    ; - maybe enable PAE (if present) and 
-    ;   identity paging
-    ; - establish C-like call stack, with
-    ;   proper argument passing etc.
-    ; - make it all fit without leaving
-    ;   the MBR
-
-    ; Pass arguments
-    ; - zero-pad shorter arguments
-    movzx eax, byte [bootdev]               ; Store boot device number
-    push eax
-
-    lea eax, [OemLabel]                     ; Store BPB location
-    push eax
-
-    lea eax, [ADDR_E820_MAP]                ; Store E820 map location
-    push eax
-
-    ; Perform near call to loaded program
-    lea eax, [ADDR_S2_LDR]
-    call eax
-
-    ; Halt (unreachable)
-    cli
-    hlt
-
 ; Variables
-bootdev     db 0    ; Boot device (used predominantly by the BIOS)
-errmsg      db "Boot failed. Replace boot device and reset.", 0
-
-; Structures
-; - Global descriptor table
-; For now, focus on the kernel
-align 16
-gdt:
-    ; Null descriptor (0x00)
-    .null:
-        dq 0                                ; 4 x 16 zeroes
-    ; Kernel mode descriptor (0x08, 0x10)
-    .kern_cs: equ $ - gdt
-        .kern_cs.limit_l    dw 0xffff       ; Limit         (00-15)
-        .kern_cs.base_l     dw 0x0000       ; Base          (16-31)
-        .kern_cs.base_m     db 0x00         ; Base          (32-39)
-        .kern_cs.access     db 0x9a         ; Access        (40-47)
-        .kern_cs.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
-        .kern_cs.base_h     db 0x00         ; Base          (56-63)
-    .kern_ds: equ $ - gdt
-        .kern_ds.limit_l    dw 0xffff       ; Limit         (00-15)
-        .kern_ds.base_l     dw 0x0000       ; Base          (16-31)
-        .kern_ds.base_m     db 0x00         ; Base          (32-39)
-        .kern_ds.access     db 0x92         ; Access        (40-47)
-        .kern_ds.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
-        .kern_ds.base_h     db 0x00         ; Base          (56-63)
-.end:
-
-; - GDT pointer
-gdtr:
-    dw gdt.end - gdt - 1                    ; Size of GDT - 1
-    dd gdt                                  ; Base of GDT
-zidtr:
-    ; - assume this area is zeroed out
+RootDirSectors:
+    dw 0
+FirstRootDirSector:
+    dw 0
+FirstDataSector:
+    dw 0
 
 times 510-($-$$) db 0                       ; Pad the boot record
 dw 0xaa55                                   ; Boot signature
+
+read_buf:                                   ; Read buffer at 0x7e00
