@@ -7,7 +7,9 @@
 # for testing purposes
 *.bin
 *.o
+*.ini
 
 /build
 /build/*.bin
 /build/*.o
+/build/boot.img
