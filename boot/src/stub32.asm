@@ -79,12 +79,14 @@ _stub32:
                                 ; made the MBR call this loader,
                                 ; rather than jump to it.
 
-    pop eax                     ; pop BPB location
-    pop ebx                     ; pop boot device number
+    pop eax                     ; pop E820 map location
+    pop ebx                     ; pop BPB location
+    pop ecx                     ; pop boot device number
 
     ; Store them locally
-    mov [oem_label.low], eax    ; BPB location
-    mov [bootdev.low], ebx      ; boot device number
+    mov [e820_map.low], eax     ; E820 map location
+    mov [oem_label.low], ebx    ; BPB location
+    mov [bootdev.low], ecx      ; boot device number
 
     ; Reset stack to 0x7b00
     mov esp, 0x7b00
@@ -185,12 +187,12 @@ init_paging:
 
     ; - set flags
     ; - map PT 0, page 0 to 0-4 kiB
-    mov ebx, PT_PRESENT | PT_READWRITE
+    mov eax, PT_PRESENT | PT_READWRITE
     mov ecx, ENTRIES_PER_PT     ; Fill PT 0
 
 .set_entry_ident:
-    mov dword [edi], ebx        ; Write entry to [EDI]
-    add ebx, SIZEOF_PAGE        ; Map next physical page
+    mov dword [edi], eax        ; Write entry to [EDI]
+    add eax, SIZEOF_PAGE        ; Map next physical page
     add edi, SIZEOF_PT_ENTRY    ; Write to next entry
     loop .set_entry_ident
 .end:
@@ -218,6 +220,7 @@ enable_lm:
     mov ax, gdt64.data
 
     ; Load 64-bit GDT and perform far jump
+    ; - for now, use identity mapping
     lgdt [gdt64.pointer]
     jmp gdt64.code:_start
 
@@ -313,12 +316,11 @@ oem_label:
     .low        dd 0
     .high       dd 0
 
-; Active text mode (16-bit extended to 64-bit)
-textmode:
-    .low    dd 0
-    .high   dd 0
-
 ; Boot device (8-bit extended to 64-bit)
 bootdev:
-    .low    dd 0
-    .high   dd 0
+    .low        dd 0
+    .high       dd 0
+
+e820_map:
+    .low        dd 0
+    .high       dd 0
