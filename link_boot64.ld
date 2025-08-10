@@ -12,6 +12,10 @@ SECTIONS {
         *(.stub64)
 
         . = ALIGN(16);
+
+        /* offset is guaranteed to be positive */
+        _hal_offset = .;
+        *(.vt_hal)
         *(.hal)
 
         . = ALIGN(16); 
