@@ -13,12 +13,9 @@ SECTIONS {
 
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
-        /* 
-            Alias start of 'boot64.bin' 
-            Highly sensitive to source path
-        */
-
         *(.text .text.*)
+
+        . = ALIGN(16);
         *(.data .data.*)
 
         /*
