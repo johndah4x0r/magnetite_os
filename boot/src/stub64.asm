@@ -25,6 +25,8 @@ _start:
     dq NULL
 .vt_offset:
     dq NULL
+.pad:
+    align 16, nop
 .start:
     cli                 ; Kill interrupts
 
@@ -38,5 +40,8 @@ _start:
     mov gs, ax
     mov ss, ax
 
-    ; TODO
-    hlt
+.spin:
+    ; Freeze without eternally halting
+    ; (to avoid killing debuggers...)
+    pause               ; Signal spin loop
+    jmp .spin           ; Repeat
