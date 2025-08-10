@@ -4,12 +4,15 @@
 ; binaries are linked at a later stage
 
 extern _start                       ; Wrapped 64-bit code label
+extern _start_offset                ; Offset to _start (defined by linker)
+
+NULL            equ 0               ; Null pointer
 
 ; Flags for later use
-ID_EFLAGS       equ 0x00200000      ; EFLAGS ID bit
-EXT_CPUID       equ 0x80000000      ; CPUID extensions
-FEAT_CPUID      equ 0x80000001      ; CPUID extended features
-LM_EDX_CPUID    equ 0x20000000      ; Long mode bit
+ID_EFLAGS       equ 1 << 21         ; EFLAGS ID bit
+EXT_CPUID       equ 1 << 31         ; CPUID extensions
+FEAT_CPUID      equ (1 << 31) | 1   ; CPUID extended features
+LM_EDX_CPUID    equ 1 << 29         ; Long mode bit
 NO_PAGING       equ 0x7fffffff      ; No 32-bit paging
 
 PAE_ENABLE      equ 1 << 5          ; Enable PAE in CR4
@@ -29,8 +32,8 @@ PT_PRESENT      equ 1               ; Marks page as present
 PT_READWRITE    equ 2               ; Marks page as R/W
 PT_PAGESIZE     equ 128             ; Marks page as large/huge (if needed)
 
-SIZEOF_PAGE     equ 0x2000000       ; Sets page size to 2 MiB
-SIZEOF_PT       equ 0x1000          ; Sets page table size to 4 kiB
+SIZEOF_PAGE     equ 1 << 21         ; Sets page size to 2 MiB
+SIZEOF_PT       equ 1 << 12         ; Sets page table size to 4 kiB
 
 ENTRIES_PER_PT  equ 512             ; Entries per page table
 SIZEOF_PT_ENTRY equ 8               ; Size of PT entry (64 bits)
@@ -53,7 +56,22 @@ SEG_SZ_32         equ 1 << 6
 SEG_LONG_MODE     equ 1 << 5
 
 section .text
-_boot32:
+_stub32:
+    ; Header (like, c'mon?)
+    ; 0a. 32-bit near jump (e9 RR RR RR RR)
+    ; 0b. NOP padding (90 90 90)
+    ; 1.  ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
+    ; 2.  maybe-pointer to HAL vector table (here: NULL)
+    ; 3.  NOP padding (90 90 90 90 90 90 90 90)
+    jmp dword .start
+    align 8, nop
+.handover_offset:
+    dd _start_offset, 0
+.vt_offset:
+    dd NULL, NULL
+.pad:
+    align 16, nop
+.start:
     ; Kill interrupts (if they are still active)
     cli
 
@@ -189,6 +207,10 @@ enable_lm:
     mov eax, cr0
     or eax, PG_ENABLE
     mov cr0, eax
+
+    ; Load data segment number to AX
+    xor eax, eax
+    mov ax, gdt64.data
 
     ; Load 64-bit GDT and perform far jump
     lgdt [gdt64.pointer]
