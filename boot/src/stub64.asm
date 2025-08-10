@@ -33,5 +33,8 @@ _start:
     mov gs, ax
     mov ss, ax
 
-    ; TODO
-    hlt
+.spin:
+    ; Freeze without eternally halting
+    ; (to avoid killing debuggers...)
+    pause               ; Signal spin loop
+    jmp .spin           ; Repeat

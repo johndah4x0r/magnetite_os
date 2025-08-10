@@ -32,7 +32,7 @@ PT_PRESENT      equ 1               ; Marks page as present
 PT_READWRITE    equ 2               ; Marks page as R/W
 PT_PAGESIZE     equ 128             ; Marks page as large/huge (if needed)
 
-SIZEOF_PAGE     equ 1 << 21         ; Sets page size to 2 MiB
+SIZEOF_PAGE     equ 1 << 12         ; Sets page size to 4 kiB (normal pages)
 SIZEOF_PT       equ 1 << 12         ; Sets page table size to 4 kiB
 
 ENTRIES_PER_PT  equ 512             ; Entries per page table
@@ -71,6 +71,8 @@ _stub32:
 .start:
     ; Kill interrupts (if they are still active)
     cli
+
+    xchg bx, bx                 ; Breakpoint
 
     ; Unpack arguments stored in stack
     add esp, 4                  ; Ignore return address, as we
@@ -150,6 +152,8 @@ disable_paging32:
 ; TODO: maybe consider higher-half mapping
 ;       in addition to identity mapping
 init_paging:
+    xchg bx, bx                 ; Breakpoint
+
     ; Clear the master page hierarchy
     lea edi, [PML4T_ADDR]       ; Point EDI to the highest table
     mov cr3, edi                ; Let the CPU know where the tables are
@@ -160,6 +164,7 @@ init_paging:
     mov ecx, SIZEOF_PT
     rep stosd
 
+    xchg bx, bx                 ; Breakpoint
     mov edi, cr3                ; Reset EDI back to the highest table
 
 .set_flags:
@@ -174,7 +179,8 @@ init_paging:
     mov dword [edi], PT_ADDR & PT_ADDR_MASK | PT_PRESENT | PT_READWRITE
 
 .fill_pt:
-    ; Populate PT to identity-map 0-2 MiB
+    ; Populate PT 0 to identity-map 0-2 MiB
+    ; - which means using standard pages
     lea edi, [PT_ADDR]          ; Point EDI to PT 0
 
     ; - set flags
@@ -187,6 +193,8 @@ init_paging:
     add ebx, SIZEOF_PAGE        ; Map next physical page
     add edi, SIZEOF_PT_ENTRY    ; Write to next entry
     loop .set_entry_ident
+.end:
+    xchg bx, bx                 ; Breakpoint
 
 .enable_pae:
     mov eax, cr4                ; Load CR4 into EAX
@@ -270,6 +278,7 @@ panicb:
 ; it is best practice (we'll merge
 ; them anyways during linking)
 section .data
+align 16
 
 ; 64-bit GDT
 gdt64:

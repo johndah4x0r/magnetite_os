@@ -93,6 +93,12 @@ _start:
     mov ss, bx
     mov sp, 0x7b00
 
+    ; Enforce flat addressing
+    jmp 0:.start
+.start:
+    ; Restore interrupts
+    sti
+
     ; - Store device number here - ;
     cmp dl, 0
     je .next
@@ -102,6 +108,7 @@ _start:
     mov ah, 8
     int 0x13
     jc panic
+    xchg bx, bx
     and cx, 0x3f
     mov [SectorsPerTrack], cx
     movzx dx, dh
@@ -129,6 +136,7 @@ e820_scan:
     lea edi, [ADDR_E820_MAP + 4]            ; Store map at ADDR_E820_MAP + 4
     xor esi, esi                            ; Zero entry count
 .seek:
+    xchg bx, bx                             ; Breakpoing
     cmp esi, 1024                           ; Do not proceed beyond
                                             ; 1024 entries
     jge .end                                ; - skip if true
@@ -156,7 +164,10 @@ e820_scan:
 ; Load second stage from the reserved sectors
 read_s2:
     ; now what do I do?
-    
+    xchg bx, bx
+    xor eax, eax
+    xor edx, edx
+
     ; Expect >= 6 kB (>= 12 conventional sectors)
     mov ax, [ReservedSectors]               ; Get reserved sectors count
     mov dx, [BytesPerSector]                ; Get sector size
@@ -165,8 +176,7 @@ read_s2:
     jnz .read_s2_cont                       ; Skip process if the reserved area is obviously large (>= 64 kB)
 
     ; Check lower half (AX * 1 B)
-    mov dx, 512                             ; Divide reserved area size by 512 B
-    div dx                                  ; (divide value stored in AX by DX)
+    shr ax, 9                               ; Divide reserved area size by 512 B
     cmp ax, 12                              ; Check quotient
     jl panic                                ; Panic if the reserved area is too small
     ; - fall-through - ;
@@ -233,6 +243,7 @@ panic:
 align 32, nop
 
 pm:
+    xchg bx, bx
     mov eax, 0x10                           ; Point to kernel data segment
 
     ; - Set data segments
@@ -276,15 +287,26 @@ errmsg      db "Boot failed. Replace boot device and press any key to restart.",
 ; Structures
 ; - Global descriptor table
 ; For now, focus on the kernel
+align 16
 gdt:
     ; Null descriptor (0x00)
     .null:
         dq 0                                ; 4 x 16 zeroes
     ; Kernel mode descriptor (0x08, 0x10)
-    .kern_cs:
-        dw 0xffff, 0, 0x9a, 0xcf            ; ...whatever this is
-    .kern_ds:
-        dw 0xffff, 0, 0x92, 0xcf            ; ...whatever this is
+    .kern_cs: equ $ - gdt
+        .kern_cs.limit_l    dw 0xffff       ; Limit         (00-15)
+        .kern_cs.base_l     dw 0x0000       ; Base          (16-31)
+        .kern_cs.base_m     db 0x00         ; Base          (32-39)
+        .kern_cs.access     db 0x9a         ; Access        (40-47)
+        .kern_cs.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
+        .kern_cs.base_h     db 0x00         ; Base          (56-63)
+    .kern_ds: equ $ - gdt
+        .kern_ds.limit_l    dw 0xffff       ; Limit         (00-15)
+        .kern_ds.base_l     dw 0x0000       ; Base          (16-31)
+        .kern_ds.base_m     db 0x00         ; Base          (32-39)
+        .kern_ds.access     db 0x92         ; Access        (40-47)
+        .kern_ds.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
+        .kern_ds.base_h     db 0x00         ; Base          (56-63)
 .end:
 
 ; - GDT pointer
