@@ -11,6 +11,9 @@
 ;   the contract between the MBR and the second-stage
 ;   loader.
 ;
+; We'll avoid using i386+ extensions in the MBR
+; whenever possible - no cheating!
+;
 ; Low Memory is used as follows:
 ; * 0x00500-0x07af0 - stack (to be relocated)
 ; * 0x07b00-0x07bff - guard region (not enforced)
@@ -23,6 +26,8 @@
 ;   (+0x10: E820 array)
 ; * 0x10000-0x1ffff - minimum usable memory (=128 kB)
 ; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
+;
+; TODO: if possible, add concrete error messages
 
 [bits 16]
 [org 0x7c00]
@@ -79,14 +84,18 @@ FileSystem:
 ; --- Main routine --- ;
 _start:
     ; now what do I do?
-    ; Zero out segment registers 
-    ; and initialize stack
-    ; The first 3 instructions also serve as landmarks
+
+    ; The first 2 instructions serve as landmarks
     ; to determine where the BPB ends and where bootstrap
     ; code starts.
     cli                                     ; FA - Kill interrupts
     xchg bx, bx                             ; 87 DB - Bochs breakpoint
-    xor bx, bx                              ; 31 DB - Zero BX
+
+    ; Enforce flat addressing
+    jmp 0:.start
+.start:
+    ; Zero out segment registers and initialize stack
+    xor bx, bx
     mov ds, bx
     mov es, bx
 
@@ -97,32 +106,53 @@ _start:
     ; boot sector start
     mov ss, bx
     mov sp, 0x7b00
-
-    ; Enforce flat addressing
-    jmp 0:.start
-.start:
     ; Restore interrupts
     sti
 
-    ; - Store device number here - ;
+    ; Store device number
     mov [bootdev], dl
-    cmp dl, 0
-    je .next
 
-    ; Find storage device geometry
-    mov ah, 8
-    int 0x13
-    jc panic
+; Find storage device geometry
+; - not quite useful when LBA is being
+;   enforced, but *what gives?* 
+; - if not strictly necessary, then
+;   this is just dead weight
+calc_geometry:
+    clc                                     ; Clear CF
+    mov ah, 0x08                            ; Read drive parameters
+    int 0x13                                ; Call BIOS                               
+    jnc .cont
+    ; - fall-through - ;
+
+    ; TODO
+    jmp panic
+.cont:
     xchg bx, bx
+
     and cx, 0x3f
     mov [SectorsPerTrack], cx
     movzx dx, dh
     inc dx
     mov [Heads], dx
     ; - fall-through - ;
-.next:
 
-; TODO: make self-contained MBR
+; Check whether drive extensions are present
+check_ext:
+    mov ah, 0x41                            ; Extensions check
+    mov bx, 0x55aa                          ; Input bit pattern
+    mov dl, [bootdev]                       ; Read back boot device
+
+    clc                                     ; Clear CF
+    int 0x13                                ; Call BIOS
+    jc .stop                                ; Stop if CF is set
+
+    cmp bx, 0xaa55                          ; Assert that the bit pattern is altered
+    je .end                                 ; Continue if altered
+    ; --- fall-through --- ;
+.stop:
+    ; TODO
+    jmp panic
+.end:
 
 ; Calculate where the root directory and
 ; the data are located
@@ -139,7 +169,7 @@ compute_sectors:
     mov bx, [BytesPerSector]                ; Store sector size
     div bx                                  ; Divide AX by sector size
 
-    mov [RootDirSectors], ax                ; Store result
+    mov [root_dir_sectors], ax              ; Store result
     xor dx, dx                              ; (ignore remainder)
 
     ; Calculate first root directory sector
@@ -147,28 +177,39 @@ compute_sectors:
     mov bx, [FatCount]                      ; Multiply it by the FAT count
     mul bx                                  ; (here)
 
-    mov [FirstRootDirSector], ax            ; Store result
+    mov [first_root_dir_sector], ax         ; Store result
     xor dx, dx                              ; (ignore remainder)
 
     ; Calculate first data sector
-    add ax, [RootDirSectors]                ; Add number of root directory sectors
-    mov [FirstDataSector], ax               ; Store result
+    add ax, [root_dir_sectors]              ; Add number of root directory sectors
+    mov [first_data_sector], ax             ; Store result
 
 ; --- Routines --- ;
-panic:
-    xchg bx, bx                             ; Breakpoint in Bochs
-
-    ; Write error string to screen
+; Print string to screen
+; Accepts: SI (pointer to string)
+; Assumes: IF = 1
+print:
+    push ax                                 ; Save AX
     mov ah, 0x0e                            ; BIOS teletype function
-    mov si, errmsg                          ; Point to error message
-    sti                                     ; Enable all interrupts
 .cont:
     lodsb                                   ; Read 1 byte from SI, then shift
-    cmp al, 0                               ; End of string (zero-terminated)
-    je .done
+    test al, al                             ; End of string (zero-terminated)
+    jz .done
     int 0x10                                ; Call BIOS
     jmp .cont                               ; Resume loop
 .done:
+    pop ax                                  ; Restore AX
+    ret                                     ; Return to caller
+
+; Print error message to screen, then reset
+panic:
+    xchg bx, bx                             ; Breakpoint in Bochs
+    sti                                     ; Enable interrupts 
+
+    ; Write error string to screen
+    mov si, errmsg                          ; Pointer to boilerplate message
+    call print                              ; Call print function
+
     xor ax, ax                              ; Clear AX
     int 0x16                                ; Wait for keystroke
     int 0x19                                ; Reboot system
@@ -178,13 +219,27 @@ panic:
     lidt [0x7b00]
     int 0x00
 
+; Error messages
+; NOTE: This consumes valuable space
+errmsg              db "Boot failed. Replace boot device and reset.", 0
+
 ; Variables
-RootDirSectors:
+bootdev:
+    db 0
+root_dir_sectors:
     dw 0
-FirstRootDirSector:
+first_root_dir_sector:
     dw 0
-FirstDataSector:
+first_data_sector:
     dw 0
+
+; - drive access packet
+d_packet:           db 0x10, 0              ; Size field is 0x10, unused field is 0x00
+    .num_sectors    dw 0                    ; Number of sectors to be accessed
+    .buf_offset     dw 0                    ; Offset to buffer
+    .buf_segment    dw 0                    ; Segment to buffer
+    .lba_low        dw 0                    ; Lower half of LBA
+    .lba_high       dw 0                    ; Higher half of LBA
 
 times 510-($-$$) db 0                       ; Pad the boot record
 dw 0xaa55                                   ; Boot signature
