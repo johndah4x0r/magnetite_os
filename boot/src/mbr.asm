@@ -8,17 +8,17 @@
 ; 
 ; Boot parameters are passed using a cdecl-like ABI.
 ; - This isn't strictly necessary, as we *do* control
-;   the contract between the MBR and the second-stage
-;   loader.
+;   the contract between the boot record and the 
+;   second-stage loader.
 ;
-; We'll avoid using i386+ extensions in the MBR
-; whenever possible - no cheating!
+; If a CPU is older than the i386, then clearly we've
+; gone too far back in time.
 ;
 ; Low Memory is used as follows:
 ; * 0x00500-0x07af0 - stack (to be relocated)
 ; * 0x07b00-0x07bff - guard region (not enforced)
-; * 0x07c00-0x07dff - MBR
-; * 0x07e00-0x07fff - read buffer
+; * 0x07c00-0x07dff - boot record
+; * 0x07e00-0x07fff - read buffer (accept overrun in initial stage)
 ; * 0x08000-0x097ff - second-stage loader
 ; * 0x09800-0x0ffff - E820 memory map
 ;   (+0x00: 64-bit base)
@@ -35,14 +35,20 @@
 ADDR_S2_LDR         equ 0x8000
 ADDR_E820_MAP       equ 0x9800
 
-; We'll just assume that the very first bytes of the
-; target MBR are 'EB 3C 90' and work from there.
+SIZEOF_RDENTRY      equ 32
+SIZEOF_83NAME       equ 11
+
+; We'll just assume that the very first bytes
+; of the target boot record are 'EB 3C 90',
+; and work from there.
 
 jmp short _start
 nop
 
-; - Dummy BIOS parameter block (DOS 4.0)
-; Used for references, skipped when overwriting target MBR
+; Dummy BIOS parameter block (DOS 4.0)
+; - Used for references, skipped when overwriting 
+;   target MBR (or should I say, target VBR)
+;
 ; ...doesn't stop me from decorating it, though...
 OemLabel:
     db "MGNTTEOS"
@@ -100,30 +106,37 @@ _start:
     mov es, bx
 
     ; Initialize stack
-    ; - hopefully we have more than enough space
-    ; and that the stack actually moves downwards.
-    ; - set a 256 B buffer between bottom of stack and
-    ; boot sector start
+    ; - hopefully, we have more than enough
+    ;   space, and that the stack actually
+    ;   moves downwards
+    ; - set a 256 B buffer between bottom
+    ;   of stack and boot sector start
     mov ss, bx
     mov sp, 0x7b00
-    ; Restore interrupts
-    sti
+
+    ; Set flags
+    sti                                     ; Enable interrupts
+    cld                                     ; Clear direction flag
 
     ; Store device number
     mov [bootdev], dl
 
 ; Find storage device geometry
 ; - not quite useful when LBA is being
-;   enforced, but *what gives?* 
+;   enforced, but *what gives?*
 ; - if not strictly necessary, then
 ;   this is just dead weight
 calc_geometry:
     clc                                     ; Clear CF
     mov ah, 0x08                            ; Read drive parameters
-    int 0x13                                ; Call BIOS                               
-    jnc .cont
+    int 0x13                                ; Call BIOS
+    jc .stop                                ; Stop if CF is set
+
+    test ah, ah                             ; Check return code
+    jz .cont                                ; Proceed on success 
     ; - fall-through - ;
 
+.stop:
     ; TODO
     jmp panic
 .cont:
@@ -136,7 +149,8 @@ calc_geometry:
     mov [Heads], dx
     ; - fall-through - ;
 
-; Check whether drive extensions are present
+; Check whether drive extensions
+; are present
 check_ext:
     mov ah, 0x41                            ; Extensions check
     mov bx, 0x55aa                          ; Input bit pattern
@@ -145,6 +159,9 @@ check_ext:
     clc                                     ; Clear CF
     int 0x13                                ; Call BIOS
     jc .stop                                ; Stop if CF is set
+
+    test cx, 1                              ; Check whether we can use the DAP
+    jz .stop                                ; Stop if not
 
     cmp bx, 0xaa55                          ; Assert that the bit pattern is altered
     je .end                                 ; Continue if altered
@@ -159,7 +176,8 @@ check_ext:
 compute_sectors:
     xchg bx, bx                             ; Breakpoint
 
-    ; Calculate number of root directory sectors
+    ; Calculate number of root
+    ; directory sectors
     ; FIXME: This may crash in Bochs
     xor ax, ax
     xor bx, bx
@@ -167,6 +185,9 @@ compute_sectors:
     mov ax, [RootDirEntries]                ; Store number of root directory entries
     shl ax, 5                               ; Multiply it by 32
     mov bx, [BytesPerSector]                ; Store sector size
+    mov cx, bx                              ; Copy into CX
+    dec cx                                  ; Decrement CX by one
+    add ax, cx                              ; Add into AX to over-count
     div bx                                  ; Divide AX by sector size
 
     mov [root_dir_sectors], ax              ; Store result
@@ -177,12 +198,147 @@ compute_sectors:
     mov bx, [FatCount]                      ; Multiply it by the FAT count
     mul bx                                  ; (here)
 
-    mov [first_root_dir_sector], ax         ; Store result
-    xor dx, dx                              ; (ignore remainder)
+    add ax, [HiddenSectors]                 ; Add hidden sectors count
+    adc dx, 0                               ; (account for carry)
+
+    add ax, [ReservedSectors]               ; Add reserved sectors count
+    adc dx, 0                               ; (account for carry)
+
+    mov [first_root_dir_sector.low], ax     ; Store low bits
+    mov [first_root_dir_sector.high], dx    ; Store high bits
 
     ; Calculate first data sector
     add ax, [root_dir_sectors]              ; Add number of root directory sectors
-    mov [first_data_sector], ax             ; Store result
+    mov [first_data_sector.low], ax         ; Store result
+
+; Walk the root directory and locate
+; the target file
+; - this one may be a little hard to read
+walk_root_dir:
+    xor dx, dx                              ; Zero DX
+
+    ; Load parameters from variables
+    ;
+    ; TODO:
+    ; Account for high count bits.
+    ; Use i386+ extensions if
+    ; functionality requires it
+    mov bx, read_buf                        ; Load address to read buffer
+    mov cx, [root_dir_sectors]              ; Load number of root directory sectors
+    mov dl, [bootdev]                       ; Load boot device number
+
+    ; Store parameters into DAP
+
+    ; - Load LBA of first root directory sector
+    mov si, first_root_dir_sector
+    mov di, dap.lba.low
+
+    mov [dap.buf_offset], bx                ; Store buffer offset
+    mov [dap.num_sectors], cx               ; Store number of sectors
+    mov [dap.buf_segment], ds               ; Store buffer segment (DS = ES = 0)
+
+    ; Read from disk
+    xor ax, ax                              ; Zero AX
+    xor bx, bx                              ; Zero BX (for good measure)
+    mov ah, 0x42                            ; Extended read
+    mov si, dap                             ; Point SI to DAP
+
+    clc                                     ; Clear CF
+    int 0x13                                ; Call BIOS
+    jc .stop                                ; Stop on failure
+
+    test ah, ah                             ; Check return code
+    jz .cont                                ; Continue on success
+    ; --- fall-through --- ;
+.stop:
+    ; TODO
+    jmp panic
+.cont:
+    ; CONTEXT 0
+    ; - expect BX and CX to be clobbered
+    mov bx, read_buf                        ; Load address to top of read buffer
+    mov cx, [RootDirEntries]                ; Load number of root directory entries
+.top:
+    ; CONTEXT 1
+    ; variants:
+    ; - BX (entry pointer)
+    ; - CX (remaining entries counter)
+    ; - DL (first byte)
+    ; - DH (name match flag; context 2)
+    ; invariants:
+    ; - SI (target filename)
+    ; undefined:
+    ; - AX ()
+    mov dl, byte [bx]                       ; Check first byte
+                                            ; (proof that BX is favored for mem-ops)
+
+    cmp dl, 0x00                            ; (free/last entry)
+    je .next
+
+    cmp dl, 0x2e                            ; (dot entry)
+    je .next
+    
+    cmp dl, 0xe5                            ; (deleted entry)
+    je .next
+
+    ; --- fall-through --- ;
+    ; Compare file name to target file name
+    ; - expect AX, BX, CX, DX and SI to be 
+    ;   clobbered
+    push bx                                 ; Save BX (top of entry)
+    push cx                                 ; Save CX (remaining entries)
+
+    ; CONTEXT 2
+    mov cx, SIZEOF_83NAME                   ; Load size of name (decreasing counter)
+    mov si, filename                        ; Load address to target file name
+    xor dh, dh                              ; Zero DH (name match flag; unset)
+.name_cmp:
+    ; CONTEXT 2
+    ; variants:
+    ; - BX (character pointer), 
+    ; - CX (character index),
+    ; - DL (character byte),
+    ; - DH (name match flag)
+    ; - SI (target pointer)
+    ; invariants: 
+    ; - BX (top of entry; context 1)
+    ; clobbers:
+    ; - AL (target character byte)
+
+    mov dl, byte [bx]                       ; Read character from current entry
+                                            ; (again, proof that BX is favored for mem-ops)
+
+    lodsb                                   ; Load byte into AL from SI and increment it
+    cmp dl, al                              ; Compare read character to target character
+    jne .name_cmp_end                       ; Clean up if characters do not match
+    ; --- fall-through on match --- ;
+
+    inc bx                                  ; Increase BX
+    loop .name_cmp                          ; Continue comparison if CX > 0
+    ; --- fall-through on success --- ;
+
+    mov dh, 1                               ; Set name match flag
+.name_cmp_end:
+    ; END CONTEXT 2
+    pop cx                                  ; Restore CX (remaining entries)
+    pop bx                                  ; Restore BX (top of entry)
+
+    ; CONTEXT 1
+    test dh, dh                             ; Check if the match flag is set
+    jnz .end                                ; End search if a match is found
+    ; --- fall-through on fail --- ;
+
+.next:
+    ; IS CONTEXT 1
+    add bx, SIZEOF_RDENTRY                  ; Increment address to buffer by entry size
+    loop .top                               ; Return to top of loop (decrementing CX)
+    ; --- fall-through on exhaustion --- ;
+
+.end:
+    ; END CONTEXT 1
+    ; CONTEXT 0
+
+    ; TODO
 
 ; --- Routines --- ;
 ; Print string to screen
@@ -214,7 +370,8 @@ panic:
     int 0x16                                ; Wait for keystroke
     int 0x19                                ; Reboot system
 
-    ; If all else fails, force a triple fault
+    ; If all else fails, force a 
+    ; triple fault
     ; - use 0x7b00 as source
     lidt [0x7b00]
     int 0x00
@@ -223,23 +380,37 @@ panic:
 ; NOTE: This consumes valuable space
 errmsg              db "Boot failed. Replace boot device and reset.", 0
 
+; Target file name (8.3)
+; - zero-terminated for good measure
+filename            db "BOOT    BIN", 0
+
 ; Variables
 bootdev:
     db 0
 root_dir_sectors:
     dw 0
 first_root_dir_sector:
-    dw 0
+    .low            dw 0
+    .high           dw 0
 first_data_sector:
-    dw 0
+    .low            dw 0
+    .mid1           dw 0
 
-; - drive access packet
-d_packet:           db 0x10, 0              ; Size field is 0x10, unused field is 0x00
-    .num_sectors    dw 0                    ; Number of sectors to be accessed
-    .buf_offset     dw 0                    ; Offset to buffer
-    .buf_segment    dw 0                    ; Segment to buffer
-    .lba_low        dw 0                    ; Lower half of LBA
-    .lba_high       dw 0                    ; Higher half of LBA
+; Drive access packet (should be 16 bytes)
+dap:                db 0x10, 0              ; (+2) Size field is 0x10, unused field is 0x00
+    .num_sectors    dw 0                    ; (+2) Number of sectors to be accessed
+    .buf_offset     dw 0                    ; (+2) Offset to buffer
+    .buf_segment    dw 0                    ; (+2) Segment to buffer
+
+; - DAP LBA (64-bit value)
+;   Low and middle words are 16-bit
+;   for DX:AX addressing (if needed)
+.lba:
+    .lba.low        dw 0                    ; (+2) Word 0 of LBA
+    .lba.mid1       dw 0                    ; (+2) Word 1 of LBA
+    .lba.mid2       dw 0                    ; (+2) Word 2 of LBA
+    .lba.high       dw 0                    ; (+2) Word 3 of LBA
+
 
 times 510-($-$$) db 0                       ; Pad the boot record
 dw 0xaa55                                   ; Boot signature
