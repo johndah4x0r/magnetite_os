@@ -34,8 +34,26 @@ _start:
     mov gs, cx
     mov ss, cx
 
+    ; Reset stack
+    mov rsp, 0x7b00
+    mov rbp, rsp
+
     ; Dereference RDI and RDX to unwrap
     ; the "contained" values
+    ;
+    ; The contract is as follows:
+    ; - RDI: pointer to OEM label pointer,
+    ;        into OEM label pointer
+    ; - RSI: pointer to boot drive number,
+    ;        into boot drive number
+    ; - RDX: pointer to E820 map pointer,
+    ;        into E820 map pointer
+    ; - (RCX: zero-extended data segment number)
+    mov rdi, [rdi]
+    mov rsi, [rsi]
+    mov rdx, [rdx]
+
+    ; TODO
 
 .spin:
     ; Freeze without eternally halting
