@@ -2,7 +2,9 @@
 
 ; Do not use absolute positioning, as the
 ; binaries are linked at a later stage
-global _start
+global _start           ; Global export of _start
+extern main             ; Import of Rust 'main' routine
+
 ;extern _hal_offset      ; offset to HAL (defined by linker)
 
 NULL    equ 0           ; Null pointer
@@ -31,14 +33,35 @@ _start:
     cli                 ; Kill interrupts
 
     ; Initialize segments
-    ; - assuming EAX is preserved mid-jump,
+    ; - assuming ECX is preserved mid-jump,
     ;   we should be able to see the data
-    ;   segment number in EAX
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
+    ;   segment number in ECX
+    mov ds, cx
+    mov es, cx
+    mov fs, cx
+    mov gs, cx
+    mov ss, cx
+
+    ; Reset stack
+    mov rsp, 0x7b00
+    mov rbp, rsp
+
+    ; Dereference RDI and RDX to unwrap
+    ; the "contained" values
+    ;
+    ; The contract is as follows:
+    ; - RDI: pointer to OEM label pointer,
+    ;        into OEM label pointer
+    ; - RSI: pointer to boot drive number,
+    ;        into boot drive number
+    ; - RDX: pointer to E820 map pointer,
+    ;        into E820 map pointer
+    ; - (RCX: zero-extended data segment number)
+    mov rdi, [rdi]
+    mov rsi, [rsi]
+    mov rdx, [rdx]
+
+    ; TODO
 
 .spin:
     ; Freeze without eternally halting
