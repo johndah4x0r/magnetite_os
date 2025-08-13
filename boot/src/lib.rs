@@ -1,14 +1,39 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+#![no_std]
+#![no_main]
+
+use core::panic::PanicInfo;
+
+// BIOS parameter block structure
+// - if it shoud ever become necessary
+#[repr(C, packed)]
+pub struct BiosPB {
+    oem_label_raw:          [u8; 8],
+    bytes_per_sector:       u16,
+    sectors_per_cluster:    u8,
+    reserved_sectors:       u16,
+    fat_count:              u8,
+    root_dir_entries:       u16,
+    sectors:                u16,
+    medium_type:            u8,
+    sectors_per_fat:        u16,
+    heads:                  u8,
+    hidden_sectors:         u32,
+    large_sectors:          u32,
+    drive_number:           u16,
+    signature:              u8,
+    volume_id:              u32,
+    volume_label:           [u8; 11],
+    filesystem:             [u8; 8],
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// Initial routine
+//  - call it 'main' for the sake of brevity
+#[unsafe(no_mangle)]
+pub extern "C" fn main(bpb: &BiosPB) -> ! {
+    loop {}
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[panic_handler]
+fn panic(_info: &PanicInfo<'_>) -> ! {
+    loop {}
 }
