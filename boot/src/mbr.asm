@@ -50,42 +50,28 @@ nop
 ;   target MBR (or should I say, target VBR)
 ;
 ; ...doesn't stop me from decorating it, though...
-OemLabel:
-    db "MGNTTEOS"
-BytesPerSector:
-    dw 512
-SectorsPerCluster:
-    db 4
-ReservedSectors:
-    dw 13
-FatCount:
-    db 2
-RootDirEntries:
-    dw 512
-SectorsCount:
-    dw 0
-MediumType:
-    db 0xf8
-SectorsPerTab:
-    dw 64
-SectorsPerTrack:
-    dw 16
-Heads:
-    dw 8
+OemLabel:           db "MGNTTEOS"
+BytesPerSector:     dw 512
+SectorsPerCluster:  db 4
+ReservedSectors:    dw 13
+FatCount:           db 2
+RootDirEntries:     dw 512
+SectorsCount:       dw 0
+MediumType:         db 0xf8
+SectorsPerTab:      dw 64
+SectorsPerTrack:    dw 16
+Heads:              dw 8
 HiddenSectors:
-    dd 0
+    .low            dw 0
+    .high           dw 0
 LargeSectors:
-    dd 65536
-DriveNumber:
-    dw 0
-Signature:
-    db 0x29
-VolumeId:
-    dd 0x1337c0de
-VolumeLabel:
-    db "MAGNETITEOS"
-FileSystem:
-    db "FAT16   "
+    .low            dw 0
+    .high           dw 1
+DriveNumber:        dw 0
+Signature:          db 0x29
+VolumeId:           dd 0x1337c0de
+VolumeLabel:        db "MAGNETITEOS"
+FileSystem:         db "FAT16   "
 
 ; --- Main routine --- ;
 _start:
@@ -173,43 +159,61 @@ check_ext:
 
 ; Calculate where the root directory and
 ; the data are located
+; TODO: For efficiency reasons, read only
+; a few clusters at a time.
 compute_sectors:
     xchg bx, bx                             ; Breakpoint
 
     ; Calculate number of root
     ; directory sectors
     ; FIXME: This may crash in Bochs
-    xor ax, ax
-    xor bx, bx
-
+    xor dx, dx                              ; Clear DX
     mov ax, [RootDirEntries]                ; Store number of root directory entries
-    shl ax, 5                               ; Multiply it by 32
+    mov bx, 32                              ; Explicitly multiply by 32
+    mul bx                                  ; (here)
+
     mov bx, [BytesPerSector]                ; Store sector size
     mov cx, bx                              ; Copy into CX
     dec cx                                  ; Decrement CX by one
+
     add ax, cx                              ; Add into AX to over-count
+    adc dx, 0                               ; Propagate carry
+
     div bx                                  ; Divide AX by sector size
 
-    mov [root_dir_sectors], ax              ; Store result
-    xor dx, dx                              ; (ignore remainder)
+    mov [root_dir_sectors], ax              ; Store quotient and ignore remainder
+
+    ; Calculate first FAT sector
+    mov ax, [HiddenSectors.low]             ; Load low word of hidden sectors count
+    mov dx, [HiddenSectors.high]            ; Load high word of hidden sectors count
+
+    add ax, [ReservedSectors]               ; Add reserved sectors count
+    adc dx, 0                               ; Propagate carry
+
+    mov [first_fat_sector.low], ax          ; Store low word of sum
+    mov [first_fat_sector.high], dx         ; Store high word of sum
 
     ; Calculate first root directory sector
+    ; - this is done by calculating where
+    ; the FAT region ends (there are usually
+    ; more than one FATs in most volumes)
     mov ax, [SectorsPerTab]                 ; Store FAT size
     mov bx, [FatCount]                      ; Multiply it by the FAT count
     mul bx                                  ; (here)
 
-    add ax, [HiddenSectors]                 ; Add hidden sectors count
-    adc dx, 0                               ; (account for carry)
+    add ax, [first_fat_sector.low]          ; Add low word of FAT LBA
+    adc dx, [first_fat_sector.high]         ; Add high word of FAT LBA with carry
+    ; FIXME: who deals with overflows at DX?
 
-    add ax, [ReservedSectors]               ; Add reserved sectors count
-    adc dx, 0                               ; (account for carry)
-
-    mov [first_root_dir_sector.low], ax     ; Store low bits
-    mov [first_root_dir_sector.high], dx    ; Store high bits
+    mov [first_root_dir_sector.low], ax     ; Store low word of result
+    mov [first_root_dir_sector.high], dx    ; Store high word of result
 
     ; Calculate first data sector
     add ax, [root_dir_sectors]              ; Add number of root directory sectors
-    mov [first_data_sector.low], ax         ; Store result
+    adc dx, 0                               ; Propagate carry
+
+    mov [first_data_sector.low], ax         ; Store low word of sum
+    mov [first_data_sector.high], dx        ; Store high word of sum
 
 ; Walk the root directory and locate
 ; the target file
@@ -228,14 +232,14 @@ walk_root_dir:
     mov dl, [bootdev]                       ; Load boot device number
 
     ; Store parameters into DAP
-
-    ; - Load LBA of first root directory sector
-    mov si, first_root_dir_sector
-    mov di, dap.lba.low
-
     mov [dap.buf_offset], bx                ; Store buffer offset
     mov [dap.num_sectors], cx               ; Store number of sectors
     mov [dap.buf_segment], ds               ; Store buffer segment (DS = ES = 0)
+
+    mov ax, [first_root_dir_sector.low]     ; Load low word into AX
+    mov bx, [first_root_dir_sector.high]    ; Load high word into BX 
+    mov [dap.lba.low], ax
+    mov [dap.lba.mid1], bx
 
     ; Read from disk
     xor ax, ax                              ; Zero AX
@@ -260,6 +264,7 @@ walk_root_dir:
     mov cx, [RootDirEntries]                ; Load number of root directory entries
 .top:
     ; CONTEXT 1
+    ; - break-on-success loop
     ; variants:
     ; - BX (entry pointer)
     ; - CX (remaining entries counter)
@@ -294,6 +299,7 @@ walk_root_dir:
     xor dh, dh                              ; Zero DH (name match flag; unset)
 .name_cmp:
     ; CONTEXT 2
+    ; - break-on-failure loop
     ; variants:
     ; - BX (character pointer), 
     ; - CX (character index),
@@ -304,7 +310,6 @@ walk_root_dir:
     ; - BX (top of entry; context 1)
     ; clobbers:
     ; - AL (target character byte)
-
     mov dl, byte [bx]                       ; Read character from current entry
                                             ; (again, proof that BX is favored for mem-ops)
 
@@ -313,10 +318,12 @@ walk_root_dir:
     jne .name_cmp_end                       ; Clean up if characters do not match
     ; --- fall-through on match --- ;
 
-    inc bx                                  ; Increase BX
-    loop .name_cmp                          ; Continue comparison if CX > 0
-    ; --- fall-through on success --- ;
+    inc bx                                  ; Increase BX (point to next character)
+    loop .name_cmp                          ; Continue comparison while CX > 0
+    ; --- fall-through on exhaustion --- ;
 
+    ; Past this point, the names are
+    ; guaranteed to be equal
     mov dh, 1                               ; Set name match flag
 .name_cmp_end:
     ; END CONTEXT 2
@@ -337,6 +344,14 @@ walk_root_dir:
 .end:
     ; END CONTEXT 1
     ; CONTEXT 0
+    ; - BX is inhereted from CONTEXT 1
+    test dh, dh                             ; Check if the match flag is set
+    jz panic                                ; Give up if unset (file not found)
+    ; --- fall-through if DH is set --- ;
+
+parse_entry:
+    ; At this point, we should have the pointer
+    ; to the relevant directory entry in BX
 
     ; TODO
 
@@ -378,23 +393,24 @@ panic:
 
 ; Error messages
 ; NOTE: This consumes valuable space
-errmsg              db "Boot failed. Replace boot device and reset.", 0
+errmsg              db "Replace boot device and reset.", 0
 
 ; Target file name (8.3)
 ; - zero-terminated for good measure
 filename            db "BOOT    BIN", 0
 
 ; Variables
-bootdev:
-    db 0
-root_dir_sectors:
-    dw 0
+bootdev:            db 0                    ; Boot drive number
+root_dir_sectors:   dw 0                    ; Number of root directory sectors
+first_fat_sector:
+    .low            dw 0                    ; Word 0 of FAT LBA
+    .high           dw 0                    ; Word 1 of FAT LBA
 first_root_dir_sector:
-    .low            dw 0
-    .high           dw 0
+    .low            dw 0                    ; Word 0 of root directory LBA
+    .high           dw 0                    ; Word 1 of root directory LBA
 first_data_sector:
-    .low            dw 0
-    .mid1           dw 0
+    .low            dw 0                    ; Word 0 of data region LBA
+    .high           dw 0                    ; Word 1 of data region LBA
 
 ; Drive access packet (should be 16 bytes)
 dap:                db 0x10, 0              ; (+2) Size field is 0x10, unused field is 0x00
