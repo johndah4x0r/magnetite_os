@@ -4,6 +4,9 @@
 /boot/Cargo.lock
 /kern/Cargo.lock
 
+/target
+/Cargo.lock
+
 # for testing purposes
 *.bin
 *.o
