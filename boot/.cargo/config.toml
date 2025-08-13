@@ -1,3 +1,5 @@
+# There's a chance that this file is rendered
+# redundant by configurable Makefile variables
 [features]
 default = []
 
