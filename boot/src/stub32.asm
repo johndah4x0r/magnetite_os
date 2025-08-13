@@ -206,6 +206,14 @@ init_paging:
     or eax, PAE_ENABLE          ; Enable PAE in CR4
     mov cr4, eax                ; Store modified CR4
 
+; Enable long mode and hand over
+; control to 64-bit code
+; 
+; The contract is as follows:
+; - EDI: pointer to OEM label pointer
+; - ESI: pointer to boot drive number
+; - EDX: pointer to E820 map pointer
+; - ECX: zero-extended data segment number
 enable_lm:
     ; Enable IA-32e mode first
     mov ecx, EFER_MSR
@@ -218,9 +226,24 @@ enable_lm:
     or eax, PG_ENABLE
     mov cr0, eax
 
-    ; Load data segment number to AX
-    xor eax, eax
-    mov ax, gdt64.data
+    ; Load arguments according to
+    ; the System V AMD64 ABI
+    ; - this isn't strictly needed,
+    ;   but it would make the
+    ;   handover to 'main' drastically
+    ;   easier
+    ; - nor are we required to follow
+    ;   the convention strictly, as we are
+    ;   handing over control to 64-bit code
+    lea edi, [oem_label]        ; Point EDI to OEM label pointer
+    lea esi, [bootdev]          ; Point ESI to boot drive number pointer
+    lea edx, [e820_map]         ; Point EDX to E820 map pointer
+
+    ; Load data segment number to CX
+    ; - very important to NOT modify
+    ;   pre-handover
+    xor ecx, ecx
+    mov cx, gdt64.data
 
     ; Load 64-bit GDT and perform far jump
     ; - for now, use identity mapping
@@ -324,6 +347,7 @@ bootdev:
     .low        dd 0
     .high       dd 0
 
+; Pointer to E820 map (32-bit pointer extended to 64-bit)
 e820_map:
     .low        dd 0
     .high       dd 0
