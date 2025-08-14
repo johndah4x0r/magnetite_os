@@ -69,8 +69,7 @@ $(BUILD_DIR)/boot_rs.o: $(shell find $(BOOT_SRC) -type f -name '*.rs')
 # - add Rust bootloader object as dependency
 # - use proper linker script
 $(BUILD_DIR)/boot64.bin: $(BUILD_DIR)/stub64.o $(BUILD_DIR)/boot_rs.o
-	# TODO
-	nasm $(BOOT_SRC)/stub64.asm -f bin -o $(BUILD_DIR)/boot64.bin
+	ld -m elf_x86_64 -T link_boot64.ld --oformat=binary $^ -o $@
 
 $(BUILD_DIR)/boot64_wrap.o: $(BUILD_DIR)/boot64.bin
 	ld -r -m elf_i386 -b binary $(BUILD_DIR)/boot64.bin -o $(BUILD_DIR)/boot64_wrap.o;
@@ -78,6 +77,6 @@ $(BUILD_DIR)/boot64_wrap.o: $(BUILD_DIR)/boot64.bin
 	objcopy --add-symbol _start=.w_text:0 $(BUILD_DIR)/boot64_wrap.o
 
 $(BUILD_DIR)/boot1.bin: $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64_wrap.o
-	ld -m elf_i386 -T link_boot1.ld --oformat=binary $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64_wrap.o -o $(BUILD_DIR)/boot1.bin
+	ld -m elf_i386 -T link_boot1.ld --oformat=binary $^ -o $@
 
 .PHONY: all clean debug_boot
