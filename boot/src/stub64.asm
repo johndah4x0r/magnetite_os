@@ -2,10 +2,15 @@
 
 ; Do not use absolute positioning, as the
 ; binaries are linked at a later stage
-global _start           ; Global export of _start
-extern main             ; Import of Rust 'main' routine
+;
+; This is especially important, as we want
+; the secondary (tertiary?) stage to be
+; independent of initial position.
 
-;extern _hal_offset      ; offset to HAL (defined by linker)
+global _start           ; Global export of _start
+
+extern main             ; Import of Rust 'main' routine
+extern __hal_offset     ; offset to HAL (defined by linker)
 
 NULL    equ 0           ; Null pointer
 
@@ -24,9 +29,9 @@ _start:
     jmp qword .start
     align 8, nop
 .handover_offset:
-    dq NULL
+    dq main
 .vt_offset:
-    dq NULL
+    dq __hal_offset
 .pad:
     align 16, nop
 .start:
@@ -43,6 +48,8 @@ _start:
     mov ss, cx
 
     ; Reset stack
+    ; - this is the only occasion where
+    ; we'd be using static references
     mov rsp, 0x7b00
     mov rbp, rsp
 
@@ -50,11 +57,11 @@ _start:
     ; the "contained" values
     ;
     ; The contract is as follows:
-    ; - RDI: pointer to OEM label pointer,
+    ; - RDI: absolute pointer to OEM label pointer,
     ;        into OEM label pointer
-    ; - RSI: pointer to boot drive number,
+    ; - RSI: absolute pointer to boot drive number,
     ;        into boot drive number
-    ; - RDX: pointer to E820 map pointer,
+    ; - RDX: absolute pointer to E820 map pointer,
     ;        into E820 map pointer
     ; - (RCX: zero-extended data segment number)
     mov rdi, [rdi]
@@ -62,6 +69,13 @@ _start:
     mov rdx, [rdx]
 
     ; TODO
+    ; Call Rust main routine
+    ; - NEVER perform a far call, as there's
+    ; no need to change segments, and we'd
+    ; otherwise run the risk of feeding RIP 
+    ; with blatantly ncorrect values
+    call main
+    ; --- fall-through (unlikely) --- ;
 
 .spin:
     ; Freeze without eternally halting

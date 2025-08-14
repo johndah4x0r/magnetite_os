@@ -1,3 +1,8 @@
+/*
+    Data structures that can be expected to be
+    shared throughout the boot process
+*/
+
 // BIOS parameter block structure
 // - if it shoud ever become necessary
 #[repr(C, packed)]
@@ -19,4 +24,13 @@ pub struct BiosPB {
     volume_id:              u32,
     volume_label:           [u8; 11],
     filesystem:             [u8; 8],
+}
+
+// HAL vector table
+#[repr(C, align(8))]
+pub struct HalVectorTable {
+    pub inb: unsafe extern "C" fn(u16) -> u8,
+    pub outb: unsafe extern "C" fn(u16, u8),
+    pub inw: unsafe extern "C" fn (u16) -> u16,
+    pub outw: unsafe extern "C" fn(u16, u16),
 }
