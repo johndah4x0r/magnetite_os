@@ -6,7 +6,7 @@ TODO
 
 You should run `make` in the project root directory, so as
 to not clutter `magnetite_os/boot/` and ensure that paths
-in the `MakeFile` are resolved properly:
+in the `Makefile` are resolved properly:
 ```bash
 make debug_boot
 ```

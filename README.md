@@ -1,6 +1,3 @@
-# magnetite_os
-An experimental Rust OS development project
-
 ## Organization & build flow
 This project is currently divided into two sub-projects:
  *  `magnetite_os/boot` - **(WIP)** custom legacy bootloader written 
@@ -30,8 +27,8 @@ I have no idea why I even bothered lifting a finger...
 ## Key concepts & terminology
 Specific concepts and terminology are more appropriately explained
 in their respective contexts: 
- *  boot-related breakdown in [`magnetite_os/boot/README.md`](boot/README.md), and
- *  kernel-related breakdown in [`magnetite_os/kern/README.md`](kern/README.MD)
+ *  boot-related breakdown in [`magnetite_os/boot/README.md`](boot/), and
+ *  kernel-related breakdown in [`magnetite_os/kern/README.md`](kern/)
 
 ## Resources
 This project, like many other hobby OS development projects, would be
