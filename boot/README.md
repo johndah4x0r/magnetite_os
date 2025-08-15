@@ -1,6 +1,8 @@
 # magnetite_os/boot
 A custom legacy bootloader written in x86 assembly and Rust
 
+(interactive - up one level: [`magnetite_os/`](../))
+
 ## Testing
 TODO
 
