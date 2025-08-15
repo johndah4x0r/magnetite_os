@@ -2,6 +2,8 @@
 The heart of the `magnetite_os` project - an attempt to write
 the kernel in pure Rust. 
 
+(interactive - up one level: [`magnetite_os/`](../))
+
 Writing a kernel without using glue code in C or assembly is
 next to impossible, as there are platform-specific routines that 
 are either too cumbersome to implement in high-level code, or are
