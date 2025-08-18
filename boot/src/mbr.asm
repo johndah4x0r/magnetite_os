@@ -17,6 +17,9 @@
 ; * 0x07c00-0x07dff - MBR
 ; * 0x08000-0x097ff - second-stage loader
 ; * 0x09800-0x0ffff - E820 memory map
+;   (+0x00: 64-bit base)
+;   (+0x08: 64-bit size)
+;   (+0x10: E820 array)
 ; * 0x10000-0x1ffff - minimum usable memory (=128 kB)
 ; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
 
@@ -135,7 +138,7 @@ e820_scan:
     jl panic                                ; Do not proceed if LMA is
                                             ; smaller than 128 kB
 
-    lea edi, [ADDR_E820_MAP + 8]            ; Store map at ADDR_E820_MAP + 8
+    lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
     xor esi, esi                            ; Zero entry count
     xor ebx, ebx                            ; Zero EBX
 .seek:
@@ -163,15 +166,21 @@ e820_scan:
     pop edi
     jmp .end
 .end:
-    ; Store zero-extended entry count
+    ; Store zero-extended base and entry count
     ; - If entry counts were to exceed
     ; 2**32 - 1 (which shouldn't happen),
     ; then something's already wrong, and
     ; missing other areas wouldn't be the
     ; worst of our problems
-    mov [ADDR_E820_MAP], esi                ; Store entry count
+    lea ebx, [ADDR_E820_MAP + 16]           ; Calculate array base
+    mov [ADDR_E820_MAP], ebx                ; Store array base
+    xor ebx, ebx
+    mov [ADDR_E820_MAP + 4], ebx            ; Zero-extend
+
+    mov [ADDR_E820_MAP + 8], esi            ; Store entry count
     xor esi, esi
-    mov [ADDR_E820_MAP + 4], esi            ; Zero-extend
+    mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
+
     pop edi                                 ; Restore EDI
 
 ; Load second stage from the reserved sectors

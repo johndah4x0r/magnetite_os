@@ -53,8 +53,8 @@ _start:
     mov rsp, 0x7b00
     mov rbp, rsp
 
-    ; Dereference RDI and RDX to unwrap
-    ; the "contained" values
+    ; Dereference RDI and RSI to unwrap the
+    ; "contained" values
     ;
     ; The contract is as follows:
     ; - RDI: absolute pointer to OEM label pointer,
@@ -64,6 +64,12 @@ _start:
     ; - RDX: absolute pointer to E820 map pointer,
     ;        into E820 map pointer
     ; - (RCX: zero-extended data segment number)
+
+    ; - limit access to 32-bit space
+    and rdi, 0xFFFFFFFF
+    and rsi, 0xFFFFFFFF
+    and rdx, 0xFFFFFFFF
+
     mov rdi, [rdi]
     mov rsi, [rsi]
     mov rdx, [rdx]

@@ -6,7 +6,7 @@ mod structs;
 
 use core::panic::PanicInfo;
 use core::ptr::write_volatile;
-use structs::BiosPB;
+use structs::{ArrayLike, BiosPB, LongE820};
 
 // Define HAL section
 // TODO
@@ -45,7 +45,11 @@ hal_vt_instance! {
 // TODO
 #[inline(never)]
 #[unsafe(no_mangle)]
-pub extern "C" fn main(bpb: &BiosPB, bootdev: u64, e820_ptr: *const u8) -> ! {
+pub extern "C" fn main(
+    bios_pb: &BiosPB,
+    bootdev: u64,
+    e820_map: &'static ArrayLike<'static, LongE820>,
+) -> ! {
     let _ = HAL_VT.dispatch(|x| &x.inb);
 
     let mut a: u8 = 0;
