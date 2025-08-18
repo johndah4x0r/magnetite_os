@@ -5,7 +5,7 @@ mod macros;
 mod structs;
 
 use core::panic::PanicInfo;
-use structs::BiosPB;
+use structs::{ArrayLike, BiosPB, LongE820};
 
 // Initial routine
 //  - call it 'main' for the sake of brevity
@@ -13,9 +13,10 @@ use structs::BiosPB;
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub extern "C" fn main(
-    _bpb: &BiosPB, 
-    _bootdev: u64, 
-    _e820_ptr: *const u8) -> ! {
+    _bios_pb: &BiosPB,
+    _bootdev: u64,
+    _e820_map: &'static ArrayLike<'static, LongE820>,
+) -> ! {
     loop {}
 }
 
