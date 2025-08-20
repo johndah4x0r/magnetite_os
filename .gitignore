@@ -11,6 +11,9 @@
 *.bin
 *.o
 *.ini
+*.log
+*.bak
+*.img
 
 /build
 /build/*.bin
