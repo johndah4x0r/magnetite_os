@@ -245,7 +245,7 @@ walk_root_dir:
     xor ax, ax                              ; Zero AX
     xor bx, bx                              ; Zero BX (for good measure)
     mov ah, 0x42                            ; Extended read
-    mov si, dap                             ; Point SI to DAP
+    mov si, dap                             ; Point SI to DAP (ES = 0)
 
     clc                                     ; Clear CF
     int 0x13                                ; Call BIOS
