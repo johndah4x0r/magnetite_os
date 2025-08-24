@@ -1,4 +1,4 @@
-; magnetite_os - boot/boot0.asm
+; magnetite_os - boot/vbr.asm
 ;
 ; The *absolute* initial stage of every boot sequence
 ; you can find out there in the wild.
@@ -18,13 +18,10 @@
 ; * 0x00500-0x07af0 - stack (to be relocated)
 ; * 0x07b00-0x07bff - guard region (not enforced)
 ; * 0x07c00-0x07dff - boot record
-; * 0x07e00-0x07fff - read buffer (accept overrun in initial stage)
-; * 0x08000-0x097ff - second-stage loader
-; * 0x09800-0x0ffff - E820 memory map
-;   (+0x00: 64-bit base)
-;   (+0x08: 64-bit size)
-;   (+0x10: E820 array)
-; * 0x10000-0x1ffff - minimum usable memory (=128 kB)
+; * 0x07e00-0x08bff - read buffer (4 kB, accept overrun in initial stage)
+; * 0x09000-0x0a7ff - second-stage loader
+; * 0x0a800-0x10fff - E820 memory map
+; * 0x11000-0x1ffff - minimum usable memory (128 kB)
 ; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
 ;
 ; TODO: if possible, add concrete error messages
@@ -32,8 +29,8 @@
 [bits 16]
 [org 0x7c00]
 
-ADDR_S2_LDR         equ 0x8000
-ADDR_E820_MAP       equ 0x9800
+ADDR_S2_LDR         equ 0x9000
+ADDR_E820_MAP       equ 0xa800
 
 SIZEOF_RDENTRY      equ 32
 SIZEOF_83NAME       equ 11
@@ -106,34 +103,6 @@ _start:
 
     ; Store device number
     mov [bootdev], dl
-
-; Find storage device geometry
-; - not quite useful when LBA is being
-;   enforced, but *what gives?*
-; - if not strictly necessary, then
-;   this is just dead weight
-calc_geometry:
-    clc                                     ; Clear CF
-    mov ah, 0x08                            ; Read drive parameters
-    int 0x13                                ; Call BIOS
-    jc .stop                                ; Stop if CF is set
-
-    test ah, ah                             ; Check return code
-    jz .cont                                ; Proceed on success 
-    ; - fall-through - ;
-
-.stop:
-    ; TODO
-    jmp panic
-.cont:
-    xchg bx, bx
-
-    and cx, 0x3f
-    mov [SectorsPerTrack], cx
-    movzx dx, dh
-    inc dx
-    mov [Heads], dx
-    ; - fall-through - ;
 
 ; Check whether drive extensions
 ; are present
@@ -211,39 +180,99 @@ compute_sectors:
     ; Calculate first data sector
     add ax, [root_dir_sectors]              ; Add number of root directory sectors
     adc dx, 0                               ; Propagate carry
-
+    
     mov [first_data_sector.low], ax         ; Store low word of sum
     mov [first_data_sector.high], dx        ; Store high word of sum
 
-; Walk the root directory and locate
-; the target file
-; - this one may be a little hard to read
+; Walk root directory
 walk_root_dir:
-    xor dx, dx                              ; Zero DX
+    xchg bx, bx                             ; Bochs breakpoint
+    xor dx, dx                              ; Zero DX (buffer size)
 
-    ; Load parameters from variables
-    ;
-    ; TODO:
-    ; Account for high count bits.
-    ; Use i386+ extensions if
-    ; functionality requires it
-    mov bx, read_buf                        ; Load address to read buffer
-    mov cx, [root_dir_sectors]              ; Load number of root directory sectors
-    mov dl, [bootdev]                       ; Load boot device number
-
-    ; Store parameters into DAP
-    mov [dap.buf_offset], bx                ; Store buffer offset
-    mov [dap.num_sectors], cx               ; Store number of sectors
-    mov [dap.buf_segment], ds               ; Store buffer segment (DS = ES = 0)
-
-    mov ax, [first_root_dir_sector.low]     ; Load low word into AX
-    mov bx, [first_root_dir_sector.high]    ; Load high word into BX 
+    ; Load parameters to DAP
+    mov ax, [first_root_dir_sector.low]
+    mov bx, [first_root_dir_sector.high]
     mov [dap.lba.low], ax
     mov [dap.lba.mid1], bx
 
+    ; CONTEXT 0
+    ; - expect CX, DX, SI and DI to be clobbered
+    mov cx, [RootDirEntries]                ; Set CX with entry count
+.top:
+    ; Check if buffer is exhausted
+    test dx, dx                             ; Check if DX > 0
+    jnz .skip_read                          ; Skip reading if true
+    ; --- fall-through --- ;
+
+    ; Read more entries on exhaustion
+    ; - also performed on the first iteration
+    mov di, read_buf                        ; Reset buffer pointer
+    mov [dap.buf_offset], di                ; Store it in DAP
+    mov cx, 2                               ; Read just two sectors
+    call read_bootdev                       ; Read from boot drive
+                                            ; (increments LBA by 2)
+
+    ; Calculate entries per sector to
+    ; mark the buffer as replenished
+    mov dx, [BytesPerSector]                ; Store sector size in DX
+    shr dx, 4                               ; Divide it by 16
+
+.skip_read:
+    ; CONTEXT 1
+    ; Perform a quick-and-dirty check
+    ; of the entry's 8.3 filename
+    ; - target name pointer in SI,
+    ;   buffer pointer in DI
+    pusha                                   ; Save all GPRs
+    mov cx, SIZEOF_83NAME                   ; Compare all 8+3 bytes
+    rep cmpsb                               ; (here)
+    popa                                    ; Restore all GPRs
+    je parse_entry                          ; Break on success
+    ; --- fall-through on failure --- ;
+
+    add di, SIZEOF_RDENTRY                  ; Increment address to buffer by entry size
+    dec dx                                  ; Decrement entries counter
+
+    loop .top                               ; Go back to top (decrement CX)
+    ; --- fall-through on exhaustion --- ;
+
+    jmp panic                               ; Give up on failure
+
+parse_entry:
+    ; CONTEXT 0
+    ; - DI is inhereted from CONTEXT 1
+
+    ; At this point, we should have the pointer
+    ; to the relevant directory entry in DI
+
+    ; TODO
+
+; --- Routines --- ;
+; Read from boot drive
+; - this one may be a little hard to read
+; Accepts:
+; - CX: number of sectors to read
+; - dap.lba: source LBA (incremented by the function)
+; - dap.buf_offset: target buffer offset
+; - dap.buf_segment: target buffer segment
+read_bootdev:
+    xchg bx, bx                             ; Bochs breakpoint
+    xor dx, dx                              ; Zero DX
+
+    pusha                                   ; Preserve GPRs
+
+    ; Set ES = CS
+    mov ax, cs
+    mov es, ax
+
+    mov ax, 1                               ; Load just 1 sector per iteration
+    mov [dap.num_sectors], ax               ; (store it in DAP)
+.read:
+    ; Clobbers: AX, BX, DX, SI
     ; Read from disk
     xor ax, ax                              ; Zero AX
     xor bx, bx                              ; Zero BX (for good measure)
+    mov dl, [bootdev]                       ; Load boot drive number into LD
     mov ah, 0x42                            ; Extended read
     mov si, dap                             ; Point SI to DAP (ES = 0)
 
@@ -255,107 +284,24 @@ walk_root_dir:
     jz .cont                                ; Continue on success
     ; --- fall-through --- ;
 .stop:
-    ; TODO
+    popa
     jmp panic
 .cont:
-    ; CONTEXT 0
-    ; - expect BX and CX to be clobbered
-    mov bx, read_buf                        ; Load address to top of read buffer
-    mov cx, [RootDirEntries]                ; Load number of root directory entries
-.top:
-    ; CONTEXT 1
-    ; - break-on-success loop
-    ; variants:
-    ; - BX (entry pointer)
-    ; - CX (remaining entries counter)
-    ; - DL (first byte)
-    ; - DH (name match flag; context 2)
-    ; invariants:
-    ; - SI (target filename)
-    ; undefined:
-    ; - AX ()
-    mov dl, byte [bx]                       ; Check first byte
-                                            ; (proof that BX is favored for mem-ops)
+    ; Move write pointer
+    mov ax, [BytesPerSector]
+    add [dap.buf_offset], ax
 
-    cmp dl, 0x00                            ; (free/last entry)
-    je .next
+    ; Increment source LBA
+    add [dap.lba.low], ax
+    adc word [dap.lba.mid1], 0
+    adc word [dap.lba.mid2], 0
+    adc word [dap.lba.high], 0
 
-    cmp dl, 0x2e                            ; (dot entry)
-    je .next
-    
-    cmp dl, 0xe5                            ; (deleted entry)
-    je .next
-
+    loop .read
     ; --- fall-through --- ;
-    ; Compare file name to target file name
-    ; - expect AX, BX, CX, DX and SI to be 
-    ;   clobbered
-    push bx                                 ; Save BX (top of entry)
-    push cx                                 ; Save CX (remaining entries)
+    popa
+    ret
 
-    ; CONTEXT 2
-    mov cx, SIZEOF_83NAME                   ; Load size of name (decreasing counter)
-    mov si, filename                        ; Load address to target file name
-    xor dh, dh                              ; Zero DH (name match flag; unset)
-.name_cmp:
-    ; CONTEXT 2
-    ; - break-on-failure loop
-    ; variants:
-    ; - BX (character pointer), 
-    ; - CX (character index),
-    ; - DL (character byte),
-    ; - DH (name match flag)
-    ; - SI (target pointer)
-    ; invariants: 
-    ; - BX (top of entry; context 1)
-    ; clobbers:
-    ; - AL (target character byte)
-    mov dl, byte [bx]                       ; Read character from current entry
-                                            ; (again, proof that BX is favored for mem-ops)
-
-    lodsb                                   ; Load byte into AL from SI and increment it
-    cmp dl, al                              ; Compare read character to target character
-    jne .name_cmp_end                       ; Clean up if characters do not match
-    ; --- fall-through on match --- ;
-
-    inc bx                                  ; Increase BX (point to next character)
-    loop .name_cmp                          ; Continue comparison while CX > 0
-    ; --- fall-through on exhaustion --- ;
-
-    ; Past this point, the names are
-    ; guaranteed to be equal
-    mov dh, 1                               ; Set name match flag
-.name_cmp_end:
-    ; END CONTEXT 2
-    pop cx                                  ; Restore CX (remaining entries)
-    pop bx                                  ; Restore BX (top of entry)
-
-    ; CONTEXT 1
-    test dh, dh                             ; Check if the match flag is set
-    jnz .end                                ; End search if a match is found
-    ; --- fall-through on fail --- ;
-
-.next:
-    ; IS CONTEXT 1
-    add bx, SIZEOF_RDENTRY                  ; Increment address to buffer by entry size
-    loop .top                               ; Return to top of loop (decrementing CX)
-    ; --- fall-through on exhaustion --- ;
-
-.end:
-    ; END CONTEXT 1
-    ; CONTEXT 0
-    ; - BX is inhereted from CONTEXT 1
-    test dh, dh                             ; Check if the match flag is set
-    jz panic                                ; Give up if unset (file not found)
-    ; --- fall-through if DH is set --- ;
-
-parse_entry:
-    ; At this point, we should have the pointer
-    ; to the relevant directory entry in BX
-
-    ; TODO
-
-; --- Routines --- ;
 ; Print string to screen
 ; Accepts: SI (pointer to string)
 ; Assumes: IF = 1
@@ -431,4 +377,5 @@ dap:                db 0x10, 0              ; (+2) Size field is 0x10, unused fi
 times 510-($-$$) db 0                       ; Pad the boot record
 dw 0xaa55                                   ; Boot signature
 
-read_buf:                                   ; Read buffer at 0x7e00
+read_buf:                                   ; Read buffer at 0x7e00 
+                                            ; (4 kB, with overrun)

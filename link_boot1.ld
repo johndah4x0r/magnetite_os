@@ -7,7 +7,7 @@
 ENTRY(_stub32)                      /* make sure _stub32 exists */
 
 SECTIONS {
-    . = 0x8000;                     /* hard-coded entry point in MBR */
+    . = 0x9000;                     /* hard-coded entry point in VBR */
 
     _start_offset = _start - .;     /* 32-bit offset to 64-bit entry */
 
