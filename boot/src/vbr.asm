@@ -14,6 +14,8 @@
 ; If a CPU is older than the i386, then clearly we've
 ; gone too far back in time.
 ;
+; We'll be using BP to keep track of local variables.
+;
 ; Low Memory is used as follows:
 ; * 0x00500-0x07af0 - stack (to be relocated)
 ; * 0x07b00-0x07bff - guard region (not enforced)
@@ -29,11 +31,35 @@
 [bits 16]
 [org 0x7c00]
 
-ADDR_S2_LDR         equ 0x9000
-ADDR_E820_MAP       equ 0xa800
+ADDR_S2_LDR                 equ 0x9000
+ADDR_E820_MAP               equ 0xa800
 
-SIZEOF_RDENTRY      equ 32
-SIZEOF_83NAME       equ 11
+SIZEOF_RDENTRY              equ 32
+SIZEOF_83NAME               equ 11
+
+FRAME                       equ -12
+ROOT_DIR_SECTORS            equ FRAME + 0
+FIRST_FAT_SECTOR_LOW        equ FRAME + 2
+FIRST_FAT_SECTOR_HIGH       equ FRAME + 4
+FIRST_RD_SECTOR_LOW         equ FRAME + 6
+FIRST_RD_SECTOR_HIGH        equ FRAME + 8
+FIRST_DATA_SECTOR_LOW       equ FRAME + 10
+FIRST_DATA_SECTOR_HIGH      equ FRAME + 12
+
+DAP_FRAME                   equ FRAME - 16
+DAP_SIZE                    equ DAP_FRAME + 0
+DAP_NUM_SECTORS             equ DAP_FRAME + 2
+DAP_BUF_OFFSET              equ DAP_FRAME + 4
+DAP_BUF_SEGMENT             equ DAP_FRAME + 6
+DAP_LBA_LOW                 equ DAP_FRAME + 8
+DAP_LBA_MID_1               equ DAP_FRAME + 10
+DAP_LBA_MID_2               equ DAP_FRAME + 12
+DAP_LBA_HIGH                equ DAP_FRAME + 14
+
+LOWEST_FRAME                equ DAP_FRAME
+GUARD_SIZE                  equ 2
+
+ALLOC_SIZE                  equ -LOWEST_FRAME + GUARD_SIZE
 
 ; We'll just assume that the very first bytes
 ; of the target boot record are 'EB 3C 90',
@@ -84,9 +110,9 @@ _start:
     jmp 0:.start
 .start:
     ; Zero out segment registers and initialize stack
-    xor bx, bx
-    mov ds, bx
-    mov es, bx
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
 
     ; Initialize stack
     ; - hopefully, we have more than enough
@@ -94,12 +120,23 @@ _start:
     ;   moves downwards
     ; - set a 256 B buffer between bottom
     ;   of stack and boot sector start
-    mov ss, bx
+    mov ss, ax
     mov sp, 0x7b00
+
+    ; Initialize frames
+    ; (don't you hate this?)
+    cld                                     ; Clear DF
+    mov bp, sp                              ; Set BP = SP (= 0x7c00, maybe?)
+    sub sp, ALLOC_SIZE                      ; Allocate this many bytes (+2 bytes guard)
+
+    lea di, [bp + DAP_FRAME]                ; Point DI to DAP
+    mov cx, 8                               ; Zero out 8 words
+    rep stosw                               ; (here)
+
+    mov word [bp + DAP_SIZE], 0x0010        ; Set DAP size
 
     ; Set flags
     sti                                     ; Enable interrupts
-    cld                                     ; Clear direction flag
 
     ; Store device number
     mov [bootdev], dl
@@ -150,7 +187,7 @@ compute_sectors:
 
     div bx                                  ; Divide AX by sector size
 
-    mov [root_dir_sectors], ax              ; Store quotient and ignore remainder
+    mov [bp + ROOT_DIR_SECTORS], ax         ; Store quotient and ignore remainder
 
     ; Calculate first FAT sector
     mov ax, [HiddenSectors.low]             ; Load low word of hidden sectors count
@@ -159,30 +196,28 @@ compute_sectors:
     add ax, [ReservedSectors]               ; Add reserved sectors count
     adc dx, 0                               ; Propagate carry
 
-    mov [first_fat_sector.low], ax          ; Store low word of sum
-    mov [first_fat_sector.high], dx         ; Store high word of sum
+    mov [bp + FIRST_FAT_SECTOR_LOW], ax     ; Store low word of sum
+    mov [bp + FIRST_FAT_SECTOR_HIGH], dx    ; Store high word of sum
 
     ; Calculate first root directory sector
     ; - this is done by calculating where
     ; the FAT region ends (there are usually
     ; more than one FATs in most volumes)
     mov ax, [SectorsPerTab]                 ; Store FAT size
-    mov bx, [FatCount]                      ; Multiply it by the FAT count
-    mul bx                                  ; (here)
+    mul word [FatCount]                     ; Multiply it by the FAT count
 
-    add ax, [first_fat_sector.low]          ; Add low word of FAT LBA
-    adc dx, [first_fat_sector.high]         ; Add high word of FAT LBA with carry
-    ; FIXME: who deals with overflows at DX?
+    add ax, [bp + FIRST_FAT_SECTOR_LOW]     ; Add low word of FAT LBA
+    adc dx, [bp + FIRST_FAT_SECTOR_HIGH]    ; Add high word of FAT LBA with carry
 
-    mov [first_root_dir_sector.low], ax     ; Store low word of result
-    mov [first_root_dir_sector.high], dx    ; Store high word of result
+    mov [bp + FIRST_RD_SECTOR_LOW], ax      ; Store low word of result
+    mov [bp + FIRST_RD_SECTOR_HIGH], dx     ; Store high word of result
 
     ; Calculate first data sector
-    add ax, [root_dir_sectors]              ; Add number of root directory sectors
+    add ax, [bp + ROOT_DIR_SECTORS]         ; Add number of root directory sectors
     adc dx, 0                               ; Propagate carry
     
-    mov [first_data_sector.low], ax         ; Store low word of sum
-    mov [first_data_sector.high], dx        ; Store high word of sum
+    mov [bp + FIRST_DATA_SECTOR_LOW], ax    ; Store low word of sum
+    mov [bp + FIRST_DATA_SECTOR_HIGH], dx   ; Store high word of sum
 
 ; Walk root directory
 walk_root_dir:
@@ -190,10 +225,9 @@ walk_root_dir:
     xor dx, dx                              ; Zero DX (buffer size)
 
     ; Load parameters to DAP
-    mov ax, [first_root_dir_sector.low]
-    mov bx, [first_root_dir_sector.high]
-    mov [dap.lba.low], ax
-    mov [dap.lba.mid1], bx
+    lea si, [bp + FIRST_RD_SECTOR_LOW]      ; Point to first RD sector (LE encoding)
+    lea di, [bp + DAP_LBA_LOW]              ; Point to LBA in DAP (LE encoding)
+    movsd                                   ; Copy 32-bit value
 
     ; CONTEXT 0
     ; - expect CX, DX, SI and DI to be clobbered
@@ -207,7 +241,7 @@ walk_root_dir:
     ; Read more entries on exhaustion
     ; - also performed on the first iteration
     mov di, read_buf                        ; Reset buffer pointer
-    mov [dap.buf_offset], di                ; Store it in DAP
+    mov [bp + DAP_BUF_OFFSET], di           ; Store it in DAP
     mov cx, 2                               ; Read just two sectors
     call read_bootdev                       ; Read from boot drive
                                             ; (increments LBA by 2)
@@ -250,6 +284,7 @@ parse_entry:
 ; --- Routines --- ;
 ; Read from boot drive
 ; - this one may be a little hard to read
+; - BP = init. SP = 0x7b00, DS = ES = CS = 0
 ; Accepts:
 ; - CX: number of sectors to read
 ; - dap.lba: source LBA (incremented by the function)
@@ -257,24 +292,15 @@ parse_entry:
 ; - dap.buf_segment: target buffer segment
 read_bootdev:
     xchg bx, bx                             ; Bochs breakpoint
-    xor dx, dx                              ; Zero DX
-
     pusha                                   ; Preserve GPRs
 
-    ; Set ES = CS
-    mov ax, cs
-    mov es, ax
-
-    mov ax, 1                               ; Load just 1 sector per iteration
-    mov [dap.num_sectors], ax               ; (store it in DAP)
+    mov word [bp + DAP_NUM_SECTORS], 1      ; Load just 1 sector per iteration
 .read:
-    ; Clobbers: AX, BX, DX, SI
+    ; Clobbers: AX, DX, SI
     ; Read from disk
-    xor ax, ax                              ; Zero AX
-    xor bx, bx                              ; Zero BX (for good measure)
     mov dl, [bootdev]                       ; Load boot drive number into LD
     mov ah, 0x42                            ; Extended read
-    mov si, dap                             ; Point SI to DAP (ES = 0)
+    lea si, [bp + DAP_FRAME]                ; Point SI to DAP (ES = 0)
 
     clc                                     ; Clear CF
     int 0x13                                ; Call BIOS
@@ -289,16 +315,17 @@ read_bootdev:
 .cont:
     ; Move write pointer
     mov ax, [BytesPerSector]
-    add [dap.buf_offset], ax
+    add [bp + DAP_BUF_OFFSET], ax
 
     ; Increment source LBA
-    add [dap.lba.low], ax
-    adc word [dap.lba.mid1], 0
-    adc word [dap.lba.mid2], 0
-    adc word [dap.lba.high], 0
+    add word [bp + DAP_LBA_LOW], 1
+    adc word [bp + DAP_LBA_MID_1], 0
+    adc word [bp + DAP_LBA_MID_2], 0
+    adc word [bp + DAP_LBA_HIGH], 0
 
-    loop .read
+    loop .read                              ; Read one more sector (decrement CX)
     ; --- fall-through --- ;
+.done:
     popa
     ret
 
@@ -347,32 +374,6 @@ filename            db "BOOT    BIN", 0
 
 ; Variables
 bootdev:            db 0                    ; Boot drive number
-root_dir_sectors:   dw 0                    ; Number of root directory sectors
-first_fat_sector:
-    .low            dw 0                    ; Word 0 of FAT LBA
-    .high           dw 0                    ; Word 1 of FAT LBA
-first_root_dir_sector:
-    .low            dw 0                    ; Word 0 of root directory LBA
-    .high           dw 0                    ; Word 1 of root directory LBA
-first_data_sector:
-    .low            dw 0                    ; Word 0 of data region LBA
-    .high           dw 0                    ; Word 1 of data region LBA
-
-; Drive access packet (should be 16 bytes)
-dap:                db 0x10, 0              ; (+2) Size field is 0x10, unused field is 0x00
-    .num_sectors    dw 0                    ; (+2) Number of sectors to be accessed
-    .buf_offset     dw 0                    ; (+2) Offset to buffer
-    .buf_segment    dw 0                    ; (+2) Segment to buffer
-
-; - DAP LBA (64-bit value)
-;   Low and middle words are 16-bit
-;   for DX:AX addressing (if needed)
-.lba:
-    .lba.low        dw 0                    ; (+2) Word 0 of LBA
-    .lba.mid1       dw 0                    ; (+2) Word 1 of LBA
-    .lba.mid2       dw 0                    ; (+2) Word 2 of LBA
-    .lba.high       dw 0                    ; (+2) Word 3 of LBA
-
 
 times 510-($-$$) db 0                       ; Pad the boot record
 dw 0xaa55                                   ; Boot signature
