@@ -1,5 +1,3 @@
-[bits 32]
-
 ; Do not use absolute positioning, as the
 ; binaries are linked at a later stage
 
@@ -55,6 +53,12 @@ SEG_GRAN_4K       equ 1 << 7
 SEG_SZ_32         equ 1 << 6
 SEG_LONG_MODE     equ 1 << 5
 
+[bits 16]
+section .stub16
+_stub16:
+    
+
+[bits 32]
 section .text
 _stub32:
     ; Header (like, c'mon?)
