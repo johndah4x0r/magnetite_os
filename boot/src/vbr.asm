@@ -37,7 +37,7 @@ ADDR_E820_MAP               equ 0xa800
 SIZEOF_RDENTRY              equ 32
 SIZEOF_83NAME               equ 11
 
-FRAME                       equ -12
+FRAME                       equ -18
 ROOT_DIR_SECTORS            equ FRAME + 0
 FIRST_FAT_SECTOR_LOW        equ FRAME + 2
 FIRST_FAT_SECTOR_HIGH       equ FRAME + 4
@@ -45,6 +45,8 @@ FIRST_RD_SECTOR_LOW         equ FRAME + 6
 FIRST_RD_SECTOR_HIGH        equ FRAME + 8
 FIRST_DATA_SECTOR_LOW       equ FRAME + 10
 FIRST_DATA_SECTOR_HIGH      equ FRAME + 12
+LAST_ACCESSED_LOW           equ FRAME + 14
+LAST_ACCESSED_HIGH          equ FRAME + 16
 
 DAP_FRAME                   equ FRAME - 16
 DAP_SIZE                    equ DAP_FRAME + 0
@@ -60,6 +62,8 @@ LOWEST_FRAME                equ DAP_FRAME
 GUARD_SIZE                  equ 2
 
 ALLOC_SIZE                  equ -LOWEST_FRAME + GUARD_SIZE
+
+RDE_FIRST_CLUSTER           equ 26
 
 ; We'll just assume that the very first bytes
 ; of the target boot record are 'EB 3C 90',
@@ -110,9 +114,9 @@ _start:
     jmp 0:.start
 .start:
     ; Zero out segment registers and initialize stack
-    xor ax, ax
-    mov ds, ax
-    mov es, ax
+    xor dx, dx
+    mov ds, dx
+    mov es, dx
 
     ; Initialize stack
     ; - hopefully, we have more than enough
@@ -120,7 +124,7 @@ _start:
     ;   moves downwards
     ; - set a 256 B buffer between bottom
     ;   of stack and boot sector start
-    mov ss, ax
+    mov ss, dx
     mov sp, 0x7b00
 
     ; Initialize frames
@@ -146,12 +150,9 @@ _start:
 check_ext:
     mov ah, 0x41                            ; Extensions check
     mov bx, 0x55aa                          ; Input bit pattern
-    mov dl, [bootdev]                       ; Read back boot device
 
-    clc                                     ; Clear CF
+    xor cx, cx                              ; Zero CX
     int 0x13                                ; Call BIOS
-    jc .stop                                ; Stop if CF is set
-
     test cx, 1                              ; Check whether we can use the DAP
     jz .stop                                ; Stop if not
 
@@ -168,25 +169,19 @@ check_ext:
 ; TODO: For efficiency reasons, read only
 ; a few clusters at a time.
 compute_sectors:
-    xchg bx, bx                             ; Breakpoint
-
     ; Calculate number of root
     ; directory sectors
     ; FIXME: This may crash in Bochs
-    xor dx, dx                              ; Clear DX
     mov ax, [RootDirEntries]                ; Store number of root directory entries
     mov bx, 32                              ; Explicitly multiply by 32
     mul bx                                  ; (here)
 
     mov bx, [BytesPerSector]                ; Store sector size
-    mov cx, bx                              ; Copy into CX
-    dec cx                                  ; Decrement CX by one
-
+    lea cx, [bx - 1]                        ; Decrement and store in CX
     add ax, cx                              ; Add into AX to over-count
     adc dx, 0                               ; Propagate carry
 
     div bx                                  ; Divide AX by sector size
-
     mov [bp + ROOT_DIR_SECTORS], ax         ; Store quotient and ignore remainder
 
     ; Calculate first FAT sector
@@ -221,7 +216,6 @@ compute_sectors:
 
 ; Walk root directory
 walk_root_dir:
-    xchg bx, bx                             ; Bochs breakpoint
     xor dx, dx                              ; Zero DX (buffer size)
 
     ; Load parameters to DAP
@@ -233,6 +227,8 @@ walk_root_dir:
     ; - expect CX, DX, SI and DI to be clobbered
     mov cx, [RootDirEntries]                ; Set CX with entry count
 .top:
+    push cx                                 ; Save CX
+
     ; Check if buffer is exhausted
     test dx, dx                             ; Check if DX > 0
     jnz .skip_read                          ; Skip reading if true
@@ -241,7 +237,7 @@ walk_root_dir:
     ; Read more entries on exhaustion
     ; - also performed on the first iteration
     mov di, read_buf                        ; Reset buffer pointer
-    mov [bp + DAP_BUF_OFFSET], di           ; Store it in DAP
+    mov [bp + DAP_BUF_OFFSET], di           ; Store it in DAP (DS = ES = 0)
     mov cx, 2                               ; Read just two sectors
     call read_bootdev                       ; Read from boot drive
                                             ; (increments LBA by 2)
@@ -257,44 +253,137 @@ walk_root_dir:
     ; of the entry's 8.3 filename
     ; - target name pointer in SI,
     ;   buffer pointer in DI
-    pusha                                   ; Save all GPRs
     mov cx, SIZEOF_83NAME                   ; Compare all 8+3 bytes
     rep cmpsb                               ; (here)
-    popa                                    ; Restore all GPRs
-    je parse_entry                          ; Break on success
+    je .done                                ; Break on success
     ; --- fall-through on failure --- ;
 
     add di, SIZEOF_RDENTRY                  ; Increment address to buffer by entry size
     dec dx                                  ; Decrement entries counter
 
+    pop cx                                  ; Restore CX
     loop .top                               ; Go back to top (decrement CX)
     ; --- fall-through on exhaustion --- ;
 
     jmp panic                               ; Give up on failure
+.done:
+    pop cx
 
 parse_entry:
+    ; TODO: maybe cheat using 32-bit registers
+
     ; CONTEXT 0
     ; - DI is inhereted from CONTEXT 1
-
     ; At this point, we should have the pointer
     ; to the relevant directory entry in DI
 
-    ; TODO
+    ; Load cluster ID for the first cluster
+    mov ax, [di + RDE_FIRST_CLUSTER]        ; Load low word, as the high word
+                                            ; is always zero in FAT12/FAT16
+    mov di, ADDR_S2_LDR                     ; Point DI to target memory
+.top:
+    ; Step 1: check current cluster ID
+    ; - expects cluster ID in AX
+    cmp ax, 0xfff0                          ; Check if we're at the end of the chain
+    jge .done                               ; If it is, we're done here
+
+    push ax                                 ; Save AX
+
+    ; Step 2
+    ; Load current cluster to target
+    xor dx, dx                              ; Zero DX
+    mov cx, [SectorsPerCluster]             ; Store cluster size in CX
+    sub ax, 2                               ; Subtract from cluster ID
+    mul cx                                  ; Multiply by cluster size
+    
+    add ax, [bp + FIRST_DATA_SECTOR_LOW]    ; Add low word to AX
+    adc dx, [bp + FIRST_DATA_SECTOR_HIGH]   ; Add high word to DX with carry
+    jc panic                                ; Give up on overflow
+
+    mov [bp + DAP_BUF_OFFSET], di           ; Store target address in DAP
+    call read_bootdev                       ; Read from boot drive
+
+    xor dx, dx                              ; Zero DX
+    mov ax, cx                              ; Store cluster size in AX
+    mul word [BytesPerSector]               ; Multiply by sector size
+    test dx, dx                             ; Check high word
+    jnz panic                               ; Give up if set
+
+    add di, ax                              ; Increment DI
+    jc panic                                ; Give up on overflow
+
+    pop ax                                  ; Restore AX
+
+    ; Step 3
+    ; Calculate offset for next cluster ID
+    ; in FAT (stored in DX:AX)
+    xor dx, dx                              ; Zero DX
+    mov cx, 2                               ; Multiply AX by 2
+    mul cx                                  ; (here)
+
+    ; Calculate relative LBA and offset
+    mov si, [BytesPerSector]                ; Store sector size in SI
+    push ax                                 ; Save AX
+    xor ax, ax                              ; Zero AX
+    div si                                  ; Divide DX:0 by sector size
+    mov bx, ax                              ; Save high quotient in BX
+
+    test dx, dx                             ; Check high remainder
+    jnz panic                               ; Give up if non-zero
+
+    pop ax                                  ; Restore AX
+    xor dx, dx                              ; Zero DX
+    div si                                  ; Divide 0:AX by sector size
+    ; (low quotient in AX, low remainder in DX)
+    xchg bx, dx                             ; Exchange BX and DX
+    ; (LBA in DX:AX, offset in 0:BX)
+    ; (now, who in the right mind would use
+    ; 64 kiB sectors?)
+
+    ; Step 4
+    ; Read next cluster ID from FAT
+    ; (LBA in DX:AX, offset in BX)
+    cmp ax, [bp + LAST_ACCESSED_LOW]        ; Compare low word of cached LBA
+    jne .replenish                          ; Replenish buffer on mismatch
+    cmp dx, [bp + LAST_ACCESSED_HIGH]       ; Compare high word of cached LBA
+    je .read                                ; Proceed on match
+    ; --- fall-through on mismatch --- ;
+.replenish:
+    mov [bp + LAST_ACCESSED_LOW], ax        ; Save low word of new LBA
+    mov [bp + LAST_ACCESSED_HIGH], dx       ; Save high word of new LBA
+
+    mov di, read_buf                        ; Point DI to read buffer
+    mov cx, 1                               ; Read just 1 sector
+
+    mov [bp + DAP_BUF_OFFSET], di           ; Store value of DI in DAP
+    call read_bootdev                       ; Read from bootdrive
+.read:
+    mov ax, [read_buf + bx]                 ; Read cluster ID from calculated offset
+    jmp .top                                ; Go back to top of loop
+.done:
+    jmp ADDR_S2_LDR                         ; Jump to second-stage loader
 
 ; --- Routines --- ;
 ; Read from boot drive
 ; - this one may be a little hard to read
 ; - BP = init. SP = 0x7b00, DS = ES = CS = 0
 ; Accepts:
+; - DX:AX: 32-bit LBA
 ; - CX: number of sectors to read
 ; - dap.lba: source LBA (incremented by the function)
 ; - dap.buf_offset: target buffer offset
 ; - dap.buf_segment: target buffer segment
 read_bootdev:
-    xchg bx, bx                             ; Bochs breakpoint
     pusha                                   ; Preserve GPRs
 
     mov word [bp + DAP_NUM_SECTORS], 1      ; Load just 1 sector per iteration
+    mov [bp + DAP_LBA_LOW], ax              ; Load low word of LBA mov [bp +
+    mov [bp + DAP_LBA_MID_1], dx            ; Load high word of LBA
+
+    ; Zero out upper 32 bits of DAP LBA
+    xor ax, ax
+    mov [bp + DAP_LBA_MID_2], ax
+    mov [bp + DAP_LBA_HIGH], ax
 .read:
     ; Clobbers: AX, DX, SI
     ; Read from disk
@@ -318,32 +407,16 @@ read_bootdev:
     add [bp + DAP_BUF_OFFSET], ax
 
     ; Increment source LBA
-    add word [bp + DAP_LBA_LOW], 1
-    adc word [bp + DAP_LBA_MID_1], 0
-    adc word [bp + DAP_LBA_MID_2], 0
-    adc word [bp + DAP_LBA_HIGH], 0
+    ; - cap usable LBA to 32 bits
+    add word [bp + DAP_LBA_LOW], 1          ; Increment low word
+    adc word [bp + DAP_LBA_MID_1], 0        ; Propagate carry to high word
+    jc panic                                ; Give up on overflow
 
     loop .read                              ; Read one more sector (decrement CX)
     ; --- fall-through --- ;
 .done:
     popa
     ret
-
-; Print string to screen
-; Accepts: SI (pointer to string)
-; Assumes: IF = 1
-print:
-    push ax                                 ; Save AX
-    mov ah, 0x0e                            ; BIOS teletype function
-.cont:
-    lodsb                                   ; Read 1 byte from SI, then shift
-    test al, al                             ; End of string (zero-terminated)
-    jz .done
-    int 0x10                                ; Call BIOS
-    jmp .cont                               ; Resume loop
-.done:
-    pop ax                                  ; Restore AX
-    ret                                     ; Return to caller
 
 ; Print error message to screen, then reset
 panic:
@@ -352,21 +425,21 @@ panic:
 
     ; Write error string to screen
     mov si, errmsg                          ; Pointer to boilerplate message
-    call print                              ; Call print function
+    mov ah, 0x0e
+.print:
+    lodsb
+    test al, al
+    jz .spin
+    int 0x10
+    jmp .print
+.spin:
+    rep nop                                 ; Pause
+    jmp .spin
 
-    xor ax, ax                              ; Clear AX
-    int 0x16                                ; Wait for keystroke
-    int 0x19                                ; Reboot system
-
-    ; If all else fails, force a 
-    ; triple fault
-    ; - use 0x7b00 as source
-    lidt [0x7b00]
-    int 0x00
 
 ; Error messages
 ; NOTE: This consumes valuable space
-errmsg              db "Replace boot device and reset.", 0
+errmsg              db "Change boot drive and reset", 0
 
 ; Target file name (8.3)
 ; - zero-terminated for good measure
