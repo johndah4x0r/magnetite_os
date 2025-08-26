@@ -1,102 +1,41 @@
-; Do not use absolute positioning, as the
-; binaries are linked at a later stage
+; magnetite_os - boot/src/stub32.asm
+; A protected mode stub for the second stage loader
+;
+; The tasks are not trivial, but are well-defined:
+; - check for long mode capability
+; - initialize PAE-style paging
+; - enable PAE
+; - enable paging
+; - load 64-bit GDT
+; - execute embedded 64-bit loader
+;
+; Refer to 'boot/src/defs.asm' for memory layout
 
+; Include definitions
+%include "boot/src/defs.asm"
+
+; Define external labels
 extern _start                       ; Wrapped 64-bit code label
 extern _start_offset                ; Offset to _start (defined by linker)
 
-NULL            equ 0               ; Null pointer
+; Include 16-bit stub
+%include "boot/src/stub16.asm"
 
-; Flags for later use
-ID_EFLAGS       equ 1 << 21         ; EFLAGS ID bit
-EXT_CPUID       equ 1 << 31         ; CPUID extensions
-FEAT_CPUID      equ (1 << 31) | 1   ; CPUID extended features
-LM_EDX_CPUID    equ 1 << 29         ; Long mode bit
-NO_PAGING       equ 0x7fffffff      ; No 32-bit paging
-
-PAE_ENABLE      equ 1 << 5          ; Enable PAE in CR4
-PG_ENABLE       equ 1 << 31         ; Enable paging in CR0
-
-
-; Page hierarchy layout
-PML4T_ADDR      equ 0x1000          ; Location of PML4 table (master hierarchy)
-PDPT_ADDR       equ 0x2000          ; Location of PDP table (huge)
-PDT_ADDR        equ 0x3000          ; Location of page directory table (large)
-PT_ADDR         equ 0x4000          ; Location of page table (standard)
-
-
-; Page masks and flags
-PT_ADDR_MASK    equ 0xffffffffff000 ; Mask to align addresses to 4 kiB
-PT_PRESENT      equ 1               ; Marks page as present
-PT_READWRITE    equ 2               ; Marks page as R/W
-PT_PAGESIZE     equ 128             ; Marks page as large/huge (if needed)
-
-SIZEOF_PAGE     equ 1 << 12         ; Sets page size to 4 kiB (normal pages)
-SIZEOF_PT       equ 1 << 12         ; Sets page table size to 4 kiB
-
-ENTRIES_PER_PT  equ 512             ; Entries per page table
-SIZEOF_PT_ENTRY equ 8               ; Size of PT entry (64 bits)
-
-EFER_MSR        equ 0xC0000080      ; EFER MSR address
-EFER_LME        equ 0x100           ; EFER IA-32e set bit
-
-
-; GDT bits
-
-; - access bits
-SEG_PRESENT        equ 1 << 7
-SEG_NOT_SYS        equ 1 << 4
-SEG_EXEC           equ 1 << 3
-SEG_RW             equ 1 << 1
-
-; - flags bits
-SEG_GRAN_4K       equ 1 << 7
-SEG_SZ_32         equ 1 << 6
-SEG_LONG_MODE     equ 1 << 5
-
-[bits 16]
-section .stub16
-_stub16:
-    
-
+; Do not use absolute positioning, as the
+; binaries will be linked at a later stage
 [bits 32]
 section .text
 _stub32:
-    ; Header (like, c'mon?)
-    ; 0a. 32-bit near jump (e9 RR RR RR RR)
-    ; 0b. NOP padding (90 90 90)
-    ; 1.  ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
-    ; 2.  maybe-pointer to HAL vector table (here: NULL)
-    ; 3.  NOP padding (90 90 90 90 90 90 90 90)
-    jmp dword .start
-    align 8, nop
-.handover_offset:
-    dd _start_offset, 0
-.vt_offset:
-    dd NULL, NULL
-.pad:
-    align 16, nop
-.start:
-    ; Kill interrupts (if they are still active)
-    cli
-
     xchg bx, bx                 ; Breakpoint
 
-    ; Unpack arguments stored in stack
-    add esp, 4                  ; Ignore return address, as we
-                                ; made the MBR call this loader,
-                                ; rather than jump to it.
-
-    pop eax                     ; pop E820 map location
-    pop ebx                     ; pop BPB location
-    pop ecx                     ; pop boot device number
+    ; Load defined quantities into memory
+    ; (for compatibility reasons)
+    mov eax, ADDR_E820_MAP
+    mov ebx, OEM_LABEL
 
     ; Store them locally
     mov [e820_map.low], eax     ; E820 map location
     mov [oem_label.low], ebx    ; BPB location
-    mov [bootdev.low], ecx      ; boot device number
-
-    ; Reset stack to 0x7b00
-    mov esp, 0x7b00
 
 ; Check if CPUID is present
 check_cpuid:
@@ -149,7 +88,7 @@ check_lm:
 
 ; Disable 32-bit paging
 ; (unlikely that paging is up, since
-; *we* control the MBR source)
+; we control the environment)
 disable_paging32:
     mov eax, cr0                ; Load CR0 into EAX
     and eax, NO_PAGING          ; Unset paging bit
