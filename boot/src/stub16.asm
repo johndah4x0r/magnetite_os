@@ -77,13 +77,13 @@ e820_scan:
     jl panic                                ; Do not proceed if LMA is
                                             ; smaller than 128 kB
 
-    lea edi, [ADDR_E820_MAP + 8]            ; Store map at ADDR_E820_MAP + 8
+    lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
     xor esi, esi                            ; Zero entry count
     xor ebx, ebx                            ; Zero EBX
 .seek:
     xchg bx, bx                             ; Breakpoint
     cmp esi, E820_ENTRIES                   ; Do not proceed beyond
-                                            ; 1024 entries
+                                            ; this many entries
     jge .end                                ; - skip if true
 
     push edi                                ; Save EDI
@@ -105,15 +105,21 @@ e820_scan:
     pop edi
     jmp .end
 .end:
-    ; Store zero-extended entry count
+    ; Store zero-extended base and entry count
     ; - If entry counts were to exceed
     ; 2**32 - 1 (which shouldn't happen),
     ; then something's already wrong, and
     ; missing other areas wouldn't be the
     ; worst of our problems
-    mov [ADDR_E820_MAP], esi                ; Store entry count
+    lea ebx, [ADDR_E820_MAP + 16]           ; Calculate array base
+    mov [ADDR_E820_MAP], ebx                ; Store array base
+    xor ebx, ebx
+    mov [ADDR_E820_MAP + 4], ebx            ; Zero-extend
+
+    mov [ADDR_E820_MAP + 8], esi            ; Store entry count
     xor esi, esi
-    mov [ADDR_E820_MAP + 4], esi            ; Zero-extend
+    mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
+
     pop edi                                 ; Restore EDI
 
 ; ---- TODO ---- ;
@@ -141,13 +147,13 @@ fast_a20:
 enter_pm:
     ; Here we go...
     cli                                     ; Kill interrupts
-    lgdt [gdtr]                             ; Load GDT address
+    lgdt [gdt32.pointer]                    ; Load GDT address
     mov eax, cr0                            ; Read control register 0
     or eax, 1                               ; Set PE bit 
     mov cr0, eax                            ; Write back to CR0
 
     ; Perform far jump to segment 0x08 (described in the GDT)
-    jmp gdt.kern_cs:pm
+    jmp gdt32.kern_cs:_stub32
 
     ; --- wishfull fall-through --- ;
 panic:
@@ -174,57 +180,5 @@ panic:
     lidt [0x7b00]
     int 0x00
 
-[bits 32]
-align 16, nop
-
-pm:
-    xchg bx, bx
-    mov eax, gdt.kern_ds                    ; Point to kernel data segment
-
-    ; - Set data segments
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    ; - reset stack
-    mov ss, ax                              ; Set stack segment register
-    mov esp, 0x7b00                         ; Reset stack pointer
-
-    ; --- No contract needed! --- ;
-    jmp _stub32                             ; Defined in 'stub32.asm'
-
 ; Variables
 errmsg      db "Boot failed. Replace boot device and reset.", 0
-
-; Structures
-; - Global descriptor table
-; For now, focus on the kernel
-align 16
-gdt:
-    ; Null descriptor (0x00)
-    .null:
-        dq 0                                ; 4 x 16 zeroes
-    ; Kernel mode descriptor (0x08, 0x10)
-    .kern_cs: equ $ - gdt
-        .kern_cs.limit_l    dw 0xffff       ; Limit         (00-15)
-        .kern_cs.base_l     dw 0x0000       ; Base          (16-31)
-        .kern_cs.base_m     db 0x00         ; Base          (32-39)
-        .kern_cs.access     db 0x9a         ; Access        (40-47)
-        .kern_cs.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
-        .kern_cs.base_h     db 0x00         ; Base          (56-63)
-    .kern_ds: equ $ - gdt
-        .kern_ds.limit_l    dw 0xffff       ; Limit         (00-15)
-        .kern_ds.base_l     dw 0x0000       ; Base          (16-31)
-        .kern_ds.base_m     db 0x00         ; Base          (32-39)
-        .kern_ds.access     db 0x92         ; Access        (40-47)
-        .kern_ds.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
-        .kern_ds.base_h     db 0x00         ; Base          (56-63)
-.end:
-
-; - GDT pointer
-gdtr:
-    dw gdt.end - gdt - 1                    ; Size of GDT - 1
-    dd gdt                                  ; Base of GDT
-zidtr:
-    ; - assume this area is zeroed out

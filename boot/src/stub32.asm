@@ -26,7 +26,18 @@ extern _start_offset                ; Offset to _start (defined by linker)
 [bits 32]
 section .text
 _stub32:
-    xchg bx, bx                 ; Breakpoint
+    xchg bx, bx                             ; Breakpoint
+    mov eax, gdt32.kern_ds                  ; Point to kernel data segment
+
+    ; - Set data segments
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; - reset stack
+    mov ss, ax                              ; Set stack segment register
+    mov esp, 0x7b00                         ; Reset stack pointer
 
     ; Load defined quantities into memory
     ; (for compatibility reasons)
@@ -250,7 +261,29 @@ panicb:
 ; it is best practice (we'll merge
 ; them anyways during linking)
 section .data
-align 16
+; 32-bit GDT
+gdt32:
+    ; Null descriptor (0x00)
+    .null:
+        dq 0                                ; 4 x 16 zeroes
+    ; Kernel mode descriptor (0x08, 0x10)
+    .kern_cs: equ $ - gdt32
+        .kern_cs.limit_l    dw 0xffff       ; Limit         (00-15)
+        .kern_cs.base_l     dw 0x0000       ; Base          (16-31)
+        .kern_cs.base_m     db 0x00         ; Base          (32-39)
+        .kern_cs.access     db 0x9a         ; Access        (40-47)
+        .kern_cs.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
+        .kern_cs.base_h     db 0x00         ; Base          (56-63)
+    .kern_ds: equ $ - gdt32
+        .kern_ds.limit_l    dw 0xffff       ; Limit         (00-15)
+        .kern_ds.base_l     dw 0x0000       ; Base          (16-31)
+        .kern_ds.base_m     db 0x00         ; Base          (32-39)
+        .kern_ds.access     db 0x92         ; Access        (40-47)
+        .kern_ds.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
+        .kern_ds.base_h     db 0x00         ; Base          (56-63)
+    .pointer:
+        dw $ - gdt32 - 1                    ; Size of GDT - 1
+        dd gdt32                            ; Base of GDT
 
 ; 64-bit GDT
 gdt64:
