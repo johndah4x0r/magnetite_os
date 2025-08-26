@@ -49,7 +49,7 @@ $(BUILD_DIR)/boot.img: $(BUILD_DIR) $(BUILD_DIR)/vbr.bin $(BUILD_DIR)/boot1.bin
 $(BUILD_DIR)/vbr.bin: $(BOOT_SRC)/vbr.asm
 	nasm $(BOOT_SRC)/vbr.asm -f bin -o $(BUILD_DIR)/vbr.bin 
 
-$(BUILD_DIR)/stub32.o: $(BOOT_SRC)/stub32.asm
+$(BUILD_DIR)/stub32.o: $(BOOT_SRC)/stub16.asm $(BOOT_SRC)/stub32.asm
 	nasm $(BOOT_SRC)/stub32.asm -f elf32 -o $(BUILD_DIR)/stub32.o
 
 $(BUILD_DIR)/stub64.o: $(BOOT_SRC)/stub64.asm

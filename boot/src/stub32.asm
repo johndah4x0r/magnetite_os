@@ -1,126 +1,59 @@
-; Do not use absolute positioning, as the
-; binaries are linked at a later stage
+; magnetite_os - boot/src/stub32.asm
+; A protected mode stub for the second stage loader
+;
+; The tasks are not trivial, but are well-defined:
+; - check for long mode capability
+; - initialize PAE-style paging
+; - enable PAE
+; - enable paging
+; - load 64-bit GDT
+; - execute embedded 64-bit loader
+;
+; Refer to 'boot/src/defs.asm' for memory layout
 
+; Include definitions
+%include "boot/src/defs.asm"
+
+; Define external labels
 extern _start                       ; Wrapped 64-bit code label
 extern _start_offset                ; Offset to _start (defined by linker)
 
-NULL            equ 0               ; Null pointer
+; Include 16-bit stub
+%include "boot/src/stub16.asm"
 
-; Flags for later use
-ID_EFLAGS       equ 1 << 21         ; EFLAGS ID bit
-EXT_CPUID       equ 1 << 31         ; CPUID extensions
-FEAT_CPUID      equ (1 << 31) | 1   ; CPUID extended features
-LM_EDX_CPUID    equ 1 << 29         ; Long mode bit
-NO_PAGING       equ 0x7fffffff      ; No 32-bit paging
-
-PAE_ENABLE      equ 1 << 5          ; Enable PAE in CR4
-PG_ENABLE       equ 1 << 31         ; Enable paging in CR0
-
-
-; Page hierarchy layout
-PML4T_ADDR      equ 0x1000          ; Location of PML4 table (master hierarchy)
-PDPT_ADDR       equ 0x2000          ; Location of PDP table (huge)
-PDT_ADDR        equ 0x3000          ; Location of page directory table (large)
-PT_ADDR         equ 0x4000          ; Location of page table (standard)
-
-
-; Page masks and flags
-PT_ADDR_MASK    equ 0xffffffffff000 ; Mask to align addresses to 4 kiB
-PT_PRESENT      equ 1               ; Marks page as present
-PT_READWRITE    equ 2               ; Marks page as R/W
-PT_PAGESIZE     equ 128             ; Marks page as large/huge (if needed)
-
-SIZEOF_PAGE     equ 1 << 12         ; Sets page size to 4 kiB (normal pages)
-SIZEOF_PT       equ 1 << 12         ; Sets page table size to 4 kiB
-
-ENTRIES_PER_PT  equ 512             ; Entries per page table
-SIZEOF_PT_ENTRY equ 8               ; Size of PT entry (64 bits)
-
-EFER_MSR        equ 0xC0000080      ; EFER MSR address
-EFER_LME        equ 0x100           ; EFER IA-32e set bit
-
-
-; GDT bits
-
-; - access bits
-SEG_PRESENT        equ 1 << 7
-SEG_NOT_SYS        equ 1 << 4
-SEG_EXEC           equ 1 << 3
-SEG_RW             equ 1 << 1
-
-; - flags bits
-SEG_GRAN_4K       equ 1 << 7
-SEG_SZ_32         equ 1 << 6
-SEG_LONG_MODE     equ 1 << 5
-
-NULL            equ 0
-
+; Do not use absolute positioning, as the
+; binaries will be linked at a later stage
 [bits 32]
 section .text
 _stub32:
-    ; Header (like, c'mon?)
-    ; 0a. (5) 32-bit near jump (e9 RR RR RR RR)
-    ; 0b. (4) zero extension (00 00 00 00)
-    ; 1.  (3) zero padding (00 00 00)
-    ; 2.  (8) ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
-    jmp dword .start
-.pad:
-    times 12-($-$$) db 0
-.handover_offset:
-    dd _start_offset, NULL
-.start:
     ; Kill interrupts (if they are still active)
     cli
+    xchg bx, bx                             ; Breakpoint
+    mov eax, gdt32.kern_ds                  ; Point to kernel data segment
 
-    xchg bx, bx                 ; Breakpoint
+    ; - Set data segments
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
 
-    ; Unpack arguments stored in stack
-    add esp, 4                  ; Ignore return address, as we
-                                ; made the MBR call this loader,
-                                ; rather than jump to it.
+    ; - reset stack
+    mov ss, ax                              ; Set stack segment register
+    mov esp, 0x7b00                         ; Reset stack pointer
 
-    pop eax                     ; pop E820 map location
-    pop ebx                     ; pop BPB location
-    pop ecx                     ; pop boot device number
+    ; Load defined quantities into memory
+    ; (for compatibility reasons)
+    mov eax, ADDR_E820_MAP
+    mov ebx, OEM_LABEL
 
     ; Store them locally
     mov [e820_map.low], eax     ; E820 map location
     mov [oem_label.low], ebx    ; BPB location
-    mov [bootdev.low], ecx      ; boot device number
-
-    ; Reset stack to 0x7b00
-    mov esp, 0x7b00
-
-; Check if CPUID is present
-check_cpuid:
-    pushfd                      ; Copy EFLAGS into stack
-    pop eax                     ; Store EFLAGS into EAX
-
-    mov ecx, eax                ; Store copy of EFLAGS
-
-    ; Attempt to flip the ID bit in EFLAGS
-    xor eax, ID_EFLAGS          ; Flip bit 21
-    push eax                    ; Store modified EFLAGS
-    popfd                       ; Copy from stack
-
-    pushfd                      ; Copy EFLAGS into stack
-    pop eax                     ; Store EFLAGS into EAX
-
-    ; Restore EFLAGS to its original state
-    push ecx                    ; Store original EFLAGS
-    popfd
-
-    ; Make sure that the ID bit is flipped
-    cmp eax, ecx
-    jne .end
-
-    ; --- fall-through --- ;
-    ; Panic if CPUID is in fact not present
-    lea esi, [msgs.no_cpuid]    ; Load pointer to reason
-    jmp panicb                  ; Panic - never to return...
-.end:
 
 ; Check if long mode is supported
+; - CPUID is assumed to be supported,
+; as its existence should have been
+; tested by brute force
 check_lm:
     ; Check if CPUID supports extended features
     mov eax, EXT_CPUID          ; Check highest EAX parameter
@@ -142,7 +75,7 @@ check_lm:
 
 ; Disable 32-bit paging
 ; (unlikely that paging is up, since
-; *we* control the MBR source)
+; we control the environment)
 disable_paging32:
     mov eax, cr0                ; Load CR0 into EAX
     and eax, NO_PAGING          ; Unset paging bit
@@ -304,7 +237,29 @@ panicb:
 ; it is best practice (we'll merge
 ; them anyways during linking)
 section .data
-align 16
+; 32-bit GDT
+gdt32:
+    ; Null descriptor (0x00)
+    .null:
+        dq 0                                ; 4 x 16 zeroes
+    ; Kernel mode descriptor (0x08, 0x10)
+    .kern_cs: equ $ - gdt32
+        .kern_cs.limit_l    dw 0xffff       ; Limit         (00-15)
+        .kern_cs.base_l     dw 0x0000       ; Base          (16-31)
+        .kern_cs.base_m     db 0x00         ; Base          (32-39)
+        .kern_cs.access     db 0x9a         ; Access        (40-47)
+        .kern_cs.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
+        .kern_cs.base_h     db 0x00         ; Base          (56-63)
+    .kern_ds: equ $ - gdt32
+        .kern_ds.limit_l    dw 0xffff       ; Limit         (00-15)
+        .kern_ds.base_l     dw 0x0000       ; Base          (16-31)
+        .kern_ds.base_m     db 0x00         ; Base          (32-39)
+        .kern_ds.access     db 0x92         ; Access        (40-47)
+        .kern_ds.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
+        .kern_ds.base_h     db 0x00         ; Base          (56-63)
+    .pointer:
+        dw $ - gdt32 - 1                    ; Size of GDT - 1
+        dd gdt32                            ; Base of GDT
 
 ; 64-bit GDT
 gdt64:
@@ -330,9 +285,31 @@ gdt64:
 
 ; Null-terminated messages
 msgs:
+    .panic16    db "Loader panicked while in 16-bit mode; CS:IP = ", 0
     .panic      db "Loader panicked while in 32-bit PM. Reason: ", 0
-    .no_cpuid   db "CPU appears to not support CPUID", 0
-    .no_lm      db "CPU appears to not support x86-64 long mode", 0
+    .reason     db "Reason: ", 0
+    .unsup      db "CPU older than i486, or otherwise unsupported", 0
+    .no_lm      db "CPU does not support x86-64 long mode", 0
+    .got_id     db "CPU vendor string: ", 0
+    .caught_ud  db "Caught #UD at CS:IP = ", 0
+    .e820       db "Failed to generate memory layout map", 0
+    .reset      db "Replace boot device, and press <Enter> to reset", 0
+    .crlf       db 0x0a, 0x0d, 0
+
+; Nibble characters
+numstr:
+    .high       db "yyyy"
+    .delim      db ":"
+    .low        db "xxxx"
+    .null       db 0
+    .chrset     db "0123456789abcdef"
+
+; Signature obtained from CPUID
+signature:
+    .low        dd 0
+    .mid        dd 0
+    .high       dd 0
+    .null       db 0
 
 ; Pointer to BPB (32-bit pointer extended to 64-bit)
 oem_label:
