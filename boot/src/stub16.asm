@@ -1,88 +1,46 @@
-; magnetite_os - boot/boot0.asm
+; magnetite_os - boot/src/stub16.asm
+; A real mode stub for the second stage loader
 ;
-; The *absolute* initial stage of every boot sequence
-; you can find out there in the wild.
+; If a CPU is older than the i386, then
+; clearly we've gone too far back in time.
 ;
-; Initialize the system, load second stage into 0x8000,
-; enable protected mode and transfer control to second stage.
-; 
-; Boot parameters are passed using a cdecl-like ABI.
-; - This isn't strictly necessary, as we *do* control
-;   the contract between the MBR and the second-stage
-;   loader.
-;
-; Low Memory is used as follows:
-; * 0x00500-0x07af0 - stack (to be relocated)
-; * 0x07b00-0x07bff - guard region (not enforced)
-; * 0x07c00-0x07dff - MBR
-; * 0x08000-0x097ff - second-stage loader
-; * 0x09800-0x0ffff - E820 memory map
-; * 0x10000-0x1ffff - minimum usable memory (=128 kB)
-; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
+; The tasks are not trivial, but well-defined:
+; - Map out memory
+; - Enable A20 gate
+; - Load 32-bit GDT
+; - Enter 32-bit protected mode
+;;
+; Refer to 'boot/src/defs.asm' for memory layout
 
+; (definitions included by 'boot/src/stub32.asm')
+
+; Do not use absolute positioning, as this
+; file will be included in 'stub32.asm'
 [bits 16]
-[org 0x7c00]
-
-ADDR_S2_LDR         equ 0x8000
-ADDR_E820_MAP       equ 0x9800
-
-; We'll just assume that the very first bytes of the
-; target MBR are 'EB 3C 90' and work from there.
-
-jmp short _start
-nop
-
-; - Dummy BIOS parameter block (DOS 4.0)
-; Used for references, skipped when overwriting target MBR
-; ...doesn't stop me from decorating it, though...
-OemLabel:
-    db "MGNTTEOS"
-BytesPerSector:
-    dw 512
-SectorsPerCluster:
-    db 4
-ReservedSectors:
-    dw 13
-FatCount:
-    db 2
-RootDirEntries:
-    dw 512
-SectorsCount:
-    dw 0
-MediumType:
-    db 0xf8
-SectorsPerTab:
-    dw 64
-SectorsPerTrack:
-    dw 16
-Heads:
-    dw 8
-HiddenSectors:
-    dd 0
-LargeSectors:
-    dd 65536
-DriveNumber:
-    dw 0
-Signature:
-    db 0x29
-VolumeId:
-    dd 0x1337c0de
-VolumeLabel:
-    db "MAGNETITEOS"
-FileSystem:
-    db "FAT16   "
 
 ; --- Main routine --- ;
-_start:
-    ; now what do I do?
-    ; Zero out segment registers 
-    ; and initialize stack
-    ; The first 3 instructions also serve as landmarks
-    ; to determine where the BPB ends and where bootstrap
-    ; code starts.
+section .stub16
+_stub16:
+    ; Header (like, c'mon?)
+    ; 0a. 16-bit near jump (e9 RR RR)
+    ; 0b. NOP padding (90 90 90 90 90)
+    ; 1.  ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
+    ; 2.  maybe-pointer to HAL vector table (here: NULL)
+    ; 3.  NOP padding (90 90 90 90 90 90 90 90)
+    jmp dword .start
+    align 8, nop
+.handover_offset:
+    dd _start_offset, 0
+.vt_offset:
+    dd NULL, NULL
+.pad:
+    align 16, nop
+.start:
     cli                                     ; FA - Kill interrupts
     xchg bx, bx                             ; 87 DB - Bochs breakpoint
-    xor bx, bx                              ; 31 DB - Zero BX
+
+    ; Zero segment registers
+    xor bx, bx
     mov ds, bx
     mov es, bx
 
@@ -95,28 +53,50 @@ _start:
     mov sp, 0x7b00
 
     ; Enforce flat addressing
-    jmp 0:.start
-.start:
-    ; Restore interrupts
-    sti
+    jmp 0:.vec
+.vec:
+    cld                                     ; Clear DF
+    sti                                     ; Restore interrupts
+    mov byte [bootdev], al                  ; Store boot drive number
 
-    ; - Store device number here - ;
-    mov [bootdev], dl
-    cmp dl, 0
-    je .next
+; Attach #UD to a custom handler
+attach_ud:
+    ; Load custom interrupt vector
+    ; - use `xchg` for external inspection
+    xor ax, ax                              ; Zero AX
+    lea si, [ud_handler]                    ; Point SI to custom handler
+    xchg [0x0018], si                       ; Load custom IP
+    xchg [0x001a], ax                       ; Load custom CS
 
-    ; Find storage device geometry
-    mov ah, 8
-    int 0x13
-    jc panic
-    xchg bx, bx
-    and cx, 0x3f
-    mov [SectorsPerTrack], cx
-    movzx dx, dh
-    inc dx
-    mov [Heads], dx
-    ; - fall-through - ;
-.next:
+; Run a slew of illegal instructions to
+; enforce minimum CPU capability
+; - checks if `cpuid` works as intended,
+; as it raises a #UD on older CPUs
+cpu_check:
+    db 0x66                                 ; (operand size override)
+    pusha                                   ; Push all 32-bit GPRs
+
+    xor eax, eax                            ; Zero EAX (prefix implicit)
+    cpuid                                   ; Identify CPU
+
+    ; Store CPU authenticity string
+    mov [signature.low], ebx
+    mov [signature.mid], edx
+    mov [signature.high], ecx
+
+    db 0x66                                 ; (operand size override)
+    popa                                    ; Pop all 32-bit GPRs
+
+    ; Print vendor string to screen
+    mov bp, sp
+    push msgs.crlf
+    push signature
+    push msgs.got_id
+    call print
+
+    ; TODO
+
+    jmp e820_scan
 
 ; Scan for memory using E820
 e820_scan:
@@ -126,22 +106,26 @@ e820_scan:
     ; Perform LMA check (wiki.osdev.org)
     clc                                     ; Clear carry flag
     int 0x12                                ; Check LMA size using BIOS
-    jc panic                                ; Do not proceed if memory
+    jc .stop                                ; Do not proceed if memory
                                             ; size cannot be assessed
 
     cmp ax, 128                             ; Make sure we have at least 
                                             ; 128 kB of continuous memory
 
-    jl panic                                ; Do not proceed if LMA is
+    jge .cont                               ; Do not proceed if LMA is
                                             ; smaller than 128 kB
-
-    lea edi, [ADDR_E820_MAP + 8]            ; Store map at ADDR_E820_MAP + 8
+    ; --- fall-through --- ;
+.stop:
+    mov si, msgs.e820
+    call panic
+.cont:
+    lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
     xor esi, esi                            ; Zero entry count
     xor ebx, ebx                            ; Zero EBX
 .seek:
-    xchg bx, bx                             ; Breakpoing
-    cmp esi, 1024                           ; Do not proceed beyond
-                                            ; 1024 entries
+    xchg bx, bx                             ; Breakpoint
+    cmp esi, E820_ENTRIES                   ; Do not proceed beyond
+                                            ; this many entries
     jge .end                                ; - skip if true
 
     push edi                                ; Save EDI
@@ -163,46 +147,22 @@ e820_scan:
     pop edi
     jmp .end
 .end:
-    ; Store zero-extended entry count
+    ; Store zero-extended base and entry count
     ; - If entry counts were to exceed
     ; 2**32 - 1 (which shouldn't happen),
     ; then something's already wrong, and
     ; missing other areas wouldn't be the
     ; worst of our problems
-    mov [ADDR_E820_MAP], esi                ; Store entry count
+    lea ebx, [ADDR_E820_MAP + 16]           ; Calculate array base
+    mov [ADDR_E820_MAP], ebx                ; Store array base
+    xor ebx, ebx
+    mov [ADDR_E820_MAP + 4], ebx            ; Zero-extend
+
+    mov [ADDR_E820_MAP + 8], esi            ; Store entry count
     xor esi, esi
-    mov [ADDR_E820_MAP + 4], esi            ; Zero-extend
+    mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
+
     pop edi                                 ; Restore EDI
-
-; Load second stage from the reserved sectors
-read_s2:
-    ; now what do I do?
-    xchg bx, bx                             ; Breakpoint
-    xor eax, eax                            ; Zero EAX
-    xor edx, edx                            ; Zero EDX
-
-    ; Expect >= 6.5 kB (>= 13 conventional sectors)
-    mov ax, [ReservedSectors]               ; Get reserved sectors count
-    mov dx, [BytesPerSector]                ; Get sector size
-    mul dx                                  ; Get reserved area size (DX:AX)
-    cmp dx, 0                               ; Check upper half (DX * 64 kB)
-    jnz .read_s2_cont                       ; Skip process if the reserved area is obviously large (>= 64 kB)
-
-    ; Check lower half (AX * 1 B)
-    shr ax, 9                               ; Divide reserved area size by 512 B
-    cmp ax, 13                              ; Check quotient
-    jl panic                                ; Panic if the reserved area is too small
-    ; - fall-through - ;
-
-.read_s2_cont:
-    ; Read 12 conventional sectors
-    lea bx, [ADDR_S2_LDR]                   ; Point BIOS to buffer at ADDR_S2_LDR
-    mov ax, 0x020c                          ; Read 12 sectors
-    mov cx, 0x0002                          ; Read from LBA 1 (C0, S2)
-    mov dh, 0                               ; Read from head 0
-    mov dl, [bootdev]                       ; Read from boot device
-    int 0x13                                ; Call BIOS
-    jc panic                                ; Panic on failure
 
 ; ---- TODO ---- ;
 ; In future designs, memory layout scanning,
@@ -229,118 +189,126 @@ fast_a20:
 enter_pm:
     ; Here we go...
     cli                                     ; Kill interrupts
-    lgdt [gdtr]                             ; Load GDT address
+    lgdt [gdt32.pointer]                    ; Load GDT address
     mov eax, cr0                            ; Read control register 0
     or eax, 1                               ; Set PE bit 
     mov cr0, eax                            ; Write back to CR0
 
     ; Perform far jump to segment 0x08 (described in the GDT)
-    jmp gdt.kern_cs:pm
-
+    jmp gdt32.kern_cs:_stub32
     ; --- wishfull fall-through --- ;
+
+; Print error message and reset
+; - SI: pointer to reason string
 panic:
-    xchg bx, bx                              ; Breakpoint in Bochs
+    xchg bx, bx                             ; Breakpoint in Bochs
+
+    pop ax                                  ; Pop calling IP to AX
+    mov dx, cs                              ; Store CS in DX
+    call stringify_num                      ; Stringify CS:IP
 
     ; Write error string to screen
-    mov ah, 0x0e                            ; BIOS teletype function
-    mov si, errmsg                          ; Point to error message
-    sti                                     ; Enable all interrupts
+    mov bp, sp                              ; Store old value of SP
 
-.cont:
-    lodsb                                   ; Read 1 byte from SI, then shift
-    cmp al, 0                               ; End of string (zero-terminated)
-    je .done
-    int 0x10                                ; Call BIOS
-    jmp .cont                               ; Resume loop
-.done:
+    ; - push messages in reverse order
+    push msgs.reset                         ; Request to reset
+    push msgs.crlf                          ; Newline
+    push si                                 ; Provided reason
+    push msgs.reason                        ; Prelude
+    push msgs.crlf                          ; Newline
+    push numstr                             ; CS:IP string
+    push msgs.panic16                       ; Error message
+    push msgs.crlf                          ; Newline
+
+    call print                              ; Write pushed strings
+
+    sti                                     ; Enable all interrupts
     xor ax, ax                              ; Clear AX
     int 0x16                                ; Wait for keystroke
     int 0x19                                ; Reboot system
+    ; --- fall-through --- ;
 
-    ; If all else fails, force a triple fault
-    ; - use 0x7b00 as source
+    ; Provoke a triple fault
     lidt [0x7b00]
     int 0x00
 
-[bits 32]
-align 16, nop
+; Exception handler for #UD (INT 0x06)
+ud_handler:
+    xchg bx, bx                             ; Breakpoint
 
-pm:
-    xchg bx, bx
-    mov eax, gdt.kern_ds                    ; Point to kernel data segment
+    pop ax                                  ; Pop issuer IP
+    pop dx                                  ; Pop issuer CS
+    call stringify_num                      ; Stringify CS:IP
 
-    ; - Set data segments
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    ; Load messages in reverse order
+    mov bp, sp
+    push msgs.crlf                          ; Newline
+    push numstr                             ; CS:IP string
+    push msgs.caught_ud                     ; Error message
+    push msgs.crlf                          ; Newline
 
-    ; - reset stack
-    mov ss, ax                              ; Set stack segment register
-    mov esp, 0x7b00                         ; Reset stack pointer
+    call print                              ; Write pushed strings
 
-    ; TODO: brief pre-jump checklist
-    ; - maybe enable PAE (if present) and 
-    ;   identity paging
-    ; - establish C-like call stack, with
-    ;   proper argument passing etc.
-    ; - make it all fit without leaving
-    ;   the MBR
+    xor bx, bx                              ; Zero BX
+    mov ax, not_supported                   ; Load custom vector
+    push bx                                 ; Push CS = 0
+    push ax                                 ; Push custom vector
+    iret                                    ; Return from interrupt
+not_supported:
+    mov si, msgs.unsup                      ; Load error message
+    call panic                              ; Panic
 
-    ; Pass arguments
-    ; - zero-pad shorter arguments
-    movzx eax, byte [bootdev]               ; Store boot device number
-    push eax
+; Print message pointed by stack arguments
+; - takes BP (pre-push SP)
+; - clobbers AX, CX, DX
+print:
+    sti                                     ; Enable interrupts
+    pop dx                                  ; Pop return IP
+    mov cx, bp                              ; Calculate entry count
+    sub cx, sp                              ; (1)
+    shr cx, 1                               ; (2)
+    mov ah, 0x0e                            ; BIOS teletype function
+.cont:
+    pop si                                  ; Pop entry
+.inner:
+    lodsb                                   ; Read 1 byte from [DS:SI], then shift
+    test al, al                             ; End of string (null-terminated)
+    jz .done
+    int 0x10                                ; Call BIOS
+    jmp .inner                              ; Resume loop
+.done:
+    loop .cont                              ; Parse more entries
+    push dx                                 ; Push return IP
+    ret                                     ; Return on exhaustion
 
-    lea eax, [OemLabel]                     ; Store BPB location
-    push eax
+; Convert DX:AX to 8-digit hex string
+; - we'll use DX:AX for redundancy
+stringify_num:
+    pusha                                   ; Preserve GPRs
+    pushf                                   ; Preserve FLAGS
+    mov bx, ax                              ; Stringify AX
+    mov di, numstr.low                      ; Point to low string
+    call .conv
 
-    lea eax, [ADDR_E820_MAP]                ; Store E820 map location
-    push eax
+    mov bx, dx                              ; Stringify DX
+    mov di, numstr.high                     ; Point to high string
+    call .conv
 
-    ; Perform near call to loaded program
-    lea eax, [ADDR_S2_LDR]
-    call eax
-
-    ; Halt (unreachable)
-    cli
-    hlt
-
-; Variables
-bootdev     db 0    ; Boot device (used predominantly by the BIOS)
-errmsg      db "Boot failed. Replace boot device and reset.", 0
-
-; Structures
-; - Global descriptor table
-; For now, focus on the kernel
-align 16
-gdt:
-    ; Null descriptor (0x00)
-    .null:
-        dq 0                                ; 4 x 16 zeroes
-    ; Kernel mode descriptor (0x08, 0x10)
-    .kern_cs: equ $ - gdt
-        .kern_cs.limit_l    dw 0xffff       ; Limit         (00-15)
-        .kern_cs.base_l     dw 0x0000       ; Base          (16-31)
-        .kern_cs.base_m     db 0x00         ; Base          (32-39)
-        .kern_cs.access     db 0x9a         ; Access        (40-47)
-        .kern_cs.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
-        .kern_cs.base_h     db 0x00         ; Base          (56-63)
-    .kern_ds: equ $ - gdt
-        .kern_ds.limit_l    dw 0xffff       ; Limit         (00-15)
-        .kern_ds.base_l     dw 0x0000       ; Base          (16-31)
-        .kern_ds.base_m     db 0x00         ; Base          (32-39)
-        .kern_ds.access     db 0x92         ; Access        (40-47)
-        .kern_ds.lim_h_fl   db 0xcf         ; Limit + flags (48-55)
-        .kern_ds.base_h     db 0x00         ; Base          (56-63)
-.end:
-
-; - GDT pointer
-gdtr:
-    dw gdt.end - gdt - 1                    ; Size of GDT - 1
-    dd gdt                                  ; Base of GDT
-zidtr:
-    ; - assume this area is zeroed out
-
-times 510-($-$$) db 0                       ; Pad the boot record
-dw 0xaa55                                   ; Boot signature
+    jmp .done
+.conv:
+    mov cx, 4
+.top:
+    ; Endianness is most certainly a
+    ; fun thing to deal with...
+    push bx                                 ; Save BX
+    shr bx, 12                              ; Capture highest nibble
+    lea si,  [numstr.chrset + bx]           ; Obtain character
+    pop bx                                  ; Restore BX
+    movsb                                   ; Write to buffer (increment DI)
+    shl bx, 4                               ; Discard highest nibble
+    loop .top                               ; Repeat loop (decrement CX)
+    ret
+.done:
+    popf                                    ; Restore FLAGS
+    popa                                    ; Restore GPRs
+    ret

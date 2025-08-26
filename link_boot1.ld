@@ -4,15 +4,18 @@
     'boot1.bin'
 */
 
-ENTRY(_stub32)                      /* make sure _stub32 exists */
+ENTRY(_stub16)                      /* make sure _stub32 exists */
 
 SECTIONS {
-    . = 0x9000;                     /* hard-coded entry point in VBR */
+    . = 0xf000;                     /* hard-coded entry point in definitions file */
 
     _start_offset = _start - .;     /* 32-bit offset to 64-bit entry */
 
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
+        *(.stub16)
+
+        . = ALIGN(16);
         *(.text .text.*)
 
         . = ALIGN(16);

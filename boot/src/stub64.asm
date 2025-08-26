@@ -66,9 +66,10 @@ _start:
     ; - (RCX: zero-extended data segment number)
 
     ; - limit access to 32-bit space
-    and rdi, 0xFFFFFFFF
-    and rsi, 0xFFFFFFFF
-    and rdx, 0xFFFFFFFF
+    mov rax, 0xFFFFFFFF
+    and rdi, rax
+    and rsi, rax
+    and rdx, rax
 
     mov rdi, [rdi]
     mov rsi, [rsi]
