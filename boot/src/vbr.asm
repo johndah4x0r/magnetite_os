@@ -189,8 +189,10 @@ walk_root_dir:
     mov bx, read_buf                        ; Reset buffer pointer
     mov [bp + DAP_BUF_OFFSET], bx           ; Store it in DAP (DS = ES = 0)
     mov cx, 2                               ; Read just two sectors
+    pusha                                   ; Save all GPRs
     call read_bootdev                       ; Read from boot drive
                                             ; (increments LBA by 2)
+    popa                                    ; Restore all GPRs
 
     ; Calculate entries per sector to
     ; mark the buffer as replenished
@@ -252,7 +254,7 @@ parse_entry:
     
     add ax, [bp + FIRST_DATA_SECTOR_LOW]    ; Add low word to AX
     adc dx, [bp + FIRST_DATA_SECTOR_HIGH]   ; Add high word to DX with carry
-    jc panic                                ; Give up on overflow
+    jc .stop                                ; Give up on overflow
 
     mov [bp + DAP_BUF_OFFSET], di           ; Store target address in DAP
     mov [bp + DAP_LBA_LOW], ax
@@ -262,11 +264,13 @@ parse_entry:
     xor dx, dx                              ; Zero DX
     mov ax, cx                              ; Store cluster size in AX
     mul word [BytesPerSector]               ; Multiply by sector size
-    jc  panic                               ; Give up high word is set
+    jc .stop                                ; Give up high word is set
 
     add di, ax                              ; Increment DI
-    jc panic                                ; Give up on overflow
-
+    jnc .clear                              ; Continue on success
+.stop:
+    jmp panic
+.clear:
     xchg bx, bx
     pop ax                                  ; Restore AX
 
@@ -285,7 +289,7 @@ parse_entry:
     mov bx, ax                              ; Save high quotient in BX
 
     test dx, dx                             ; Check high remainder
-    jnz panic                               ; Give up if non-zero
+    jnz .stop                               ; Give up if non-zero
 
     pop ax                                  ; Restore AX
     xor dx, dx                              ; Zero DX
@@ -330,6 +334,7 @@ parse_entry:
 
 ; --- Routines --- ;
 ; Read from boot drive
+; Clobbers: AX, DX, SI
 ; - this one may be a little hard to read
 ; - BP = init. SP = 0x7b00, DS = ES = CS = 0
 ; Accepts:
@@ -338,11 +343,8 @@ parse_entry:
 ; - dap.buf_offset: target buffer offset
 ; - dap.buf_segment: target buffer segment
 read_bootdev:
-    pusha                                   ; Preserve GPRs
-
     mov word [bp + DAP_NUM_SECTORS], 1      ; Load just 1 sector per iteration
 .read:
-    ; Clobbers: AX, DX, SI
     ; Read from disk
     mov dl, [bootdev]                       ; Load boot drive number into LD
     mov ah, 0x42                            ; Extended read
@@ -350,15 +352,19 @@ read_bootdev:
 
     int 0x13                                ; Call BIOS
     test ah, ah                             ; Check return code
-    jz .cont                                ; Continue on success
+    jnz panic                               ; Break on error    
     ; --- fall-through --- ;
-.stop:
-    popa
-    jmp panic
+
 .cont:
-    ; Move write pointer
-    mov ax, [BytesPerSector]
-    add [bp + DAP_BUF_OFFSET], ax
+    ; Move write pointer, accounting
+    ; for segmentation
+    ; - dirty trick
+    mov ax, [BytesPerSector]                ; Load sector size
+    add [bp + DAP_BUF_OFFSET], ax           ; Add it to buffer offset
+    adc dx, 0                               ; Propagate carry
+    shr dx, 15                              ; Make it MSB
+    add [bp + DAP_BUF_SEGMENT], dx          ; Add it to buffer segment
+    jc panic                                ; Give up on overflow
 
     ; Increment source LBA
     ; - cap usable LBA to 32 bits
@@ -369,7 +375,6 @@ read_bootdev:
     loop .read                              ; Read one more sector (decrement CX)
     ; --- fall-through --- ;
 .done:
-    popa
     ret
 
 ; Print error message to screen, then reset

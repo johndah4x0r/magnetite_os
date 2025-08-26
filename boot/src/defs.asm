@@ -9,7 +9,7 @@
 ; * 0x07b00-0x07bff - guard region (not enforced)
 ; * 0x07c00-0x07dff - boot record (512 B)
 ; * 0x07e00-0x08bff - read buffer (4 kB, accept overrun in initial stage)
-; * 0x09000-0xefff  - E820 memory map (24 kB)
+; * 0x09000-0x0eff8 - E820 memory map (24 kB)
 ; * 0x0f000-0x10fff - Second stage loader (8 kB)
 ; * 0x11000-0x1ffff - minimum usable memory (128 kB)
 ; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
@@ -23,7 +23,7 @@ OEM_LABEL                   equ START_VECTOR + SIZEOF_MAGIC ; Pointer to OEM lab
 ADDR_S2_LDR                 equ 0xf000                      ; Pointer to second-stage loader
 ADDR_E820_MAP               equ 0x9000                      ; Pointer to E820 map
 
-E820_ENTRIES                equ 1024                        ; E820 map entries
+E820_ENTRIES                equ 1023                        ; E820 map entries
 
 SIZEOF_RDENTRY              equ 32                          ; Size of RDE
 SIZEOF_83NAME               equ 11                          ; Size of 8.3 name
