@@ -188,13 +188,19 @@ impl<V: HalVectorTable> HalVtableAC<V> {
         HalVtableAC { count, vt }
     }
 
-    // Dispatch routine using selector closure
-    // - return a reader guard
-    pub fn dispatch<S, F>(&self, selector: S) -> HalVtableEntryLock<'_, F>
+    // Dispatch routine using provided selector closure,
+    // and execute it using provided action closure
+    // FIXME: What even is this cursed contract?
+    pub fn dispatch<S, A, F, R>(&self, selector: S, action: A) -> R
     where
         S: FnOnce(&V) -> &HalVtableEntry<F>,
+        A: FnOnce(&F) -> R,
         F: Copy,
     {
+        // Maybe-cells for later use
+        let mut maybe_f: Option<F> = None;
+        let mut maybe_r: Option<R> = None;
+
         // Step 1 - acquire lock
         loop {
             // Read current lock state
@@ -213,17 +219,24 @@ impl<V: HalVectorTable> HalVtableAC<V> {
                 .compare_exchange(current, current + 1, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                // Step 2 - perform dispatch
-                let e = HalVtableEntryLock {
-                    count: &self.count,
-                    entry: selector(&self.vt),
-                };
-
-                return e;
+                // Step 2 - perform dispatch and break loop
+                maybe_f = Some(selector(&self.vt).load());
+                break;
             }
 
             core::hint::spin_loop();
         }
+
+        // Step 3 - perform provided action
+        if let Some(f) = maybe_f {
+            maybe_r = Some(action(&f));
+        }
+
+        // Step 4 - release lock
+        self.count.fetch_sub(1, Ordering::Release);
+
+        // Step 5 - return
+        maybe_r.unwrap()
     }
 
     // Modify VT entry using selector closure
@@ -249,8 +262,7 @@ impl<V: HalVectorTable> HalVtableAC<V> {
                 // one field, they should be binary-
                 // compatible with one another.
                 unsafe {
-                    let v_ptr =
-                        selector(&self.vt).get_cell() as *const _ as *const HalVtableEntryWriter<F>;
+                    let v_ptr = selector(&self.vt).get_cell() as *const HalVtableEntryWriter<F>;
 
                     (&*v_ptr).store(vector);
                 }
@@ -268,6 +280,7 @@ impl<V: HalVectorTable> HalVtableAC<V> {
 
 unsafe impl<V: HalVectorTable> Sync for HalVtableAC<V> {}
 
+// HAL VT entry lock (deprecated?)
 pub struct HalVtableEntryLock<'a, F: Copy> {
     count: &'a AtomicIsize,
     entry: &'a HalVtableEntry<F>,
