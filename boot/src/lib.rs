@@ -26,6 +26,14 @@ relocate! {
     fn default_outw(port: u16, _arg: u16) {
         let _ = port;
     } => ".hal";
+
+    fn default_ind(port: u16) -> u32 {
+        (port as u32) + 2
+    } => ".hal";
+
+    fn default_outd(port: u16, _arg: u32) {
+        let _ = port;
+    } => ".hal";
 }
 
 // Define HAL vector table section
@@ -37,6 +45,8 @@ hal_vt_instance! {
         outb: extern "C" fn(u16, u8) = default_outb,
         inw: extern "C" fn(u16) -> u16 = default_inw,
         outw: extern "C" fn(u16, u16) = default_outw,
+        ind: extern "C" fn(u16) -> u32 = default_ind,
+        outd: extern "C" fn(u16, u32) = default_outd,
     }; => ".vt_hal";
 }
 
@@ -50,9 +60,7 @@ pub extern "C" fn main(
     bootdev: u64,
     e820_map: &'static ArrayLike<'static, LongE820>,
 ) -> ! {
-    let _ = HAL_VT.dispatch(|x| &x.inb);
-
-    let mut a: u8 = 0;
+    let mut a: u8 = HAL_VT.dispatch(|x| &x.inb, |&f| f(0x3f8));
 
     loop {
         unsafe {

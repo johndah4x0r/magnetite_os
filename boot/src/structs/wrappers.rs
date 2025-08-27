@@ -104,7 +104,7 @@ impl<T: Copy> HalVtableEntry<T> {
     //   cell without acquiring a write
     //   lock is UB
     #[inline(always)]
-    pub const fn get_cell(&self) -> &UnsafeCell<T> {
+    pub const fn get_cell(&self) -> *const UnsafeCell<T> {
         &self.0
     }
 }
