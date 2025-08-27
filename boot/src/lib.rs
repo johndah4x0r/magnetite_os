@@ -4,6 +4,7 @@
 mod macros;
 mod structs;
 
+use core::arch::asm;
 use core::panic::PanicInfo;
 use core::ptr::write_volatile;
 use structs::{ArrayLike, BiosPB, LongE820};
@@ -11,29 +12,59 @@ use structs::{ArrayLike, BiosPB, LongE820};
 // Define HAL section
 // TODO
 relocate! {
-    fn default_inb(port: u16) -> u8 {
-        (port as u8) + 3
-    } => ".hal";
+    unsafe fn default_inb(port: u16) -> u8 {
+        let mut val: u8 = 0;
+        asm!(
+            "in al, dx",
+            in("dx") port,
+            out("al") val,
+        );
+        val
+    } => ".hal.text";
 
-    fn default_outb(port: u16, _arg: u8) {
-        let _ = port;
-    } => ".hal";
+    unsafe fn default_outb(port: u16, arg: u8) {
+        asm!(
+            "out dx, al",
+            in("dx") port,
+            in("al") arg,
+        );
+    } => ".hal.text";
 
-    fn default_inw(port: u16) -> u16 {
-        port + 2
-    } => ".hal";
+    unsafe fn default_inw(port: u16) -> u16 {
+        let mut val: u16 = 0;
+        asm!(
+            "in ax, dx",
+            in("dx") port,
+            out("ax") val,
+        );
+        val
+    } => ".hal.text";
 
-    fn default_outw(port: u16, _arg: u16) {
-        let _ = port;
-    } => ".hal";
+    unsafe fn default_outw(port: u16, arg: u16) {
+        asm!(
+            "out dx, ax",
+            in("dx") port,
+            in("ax") arg,
+        );
+    } => ".hal.text";
 
-    fn default_ind(port: u16) -> u32 {
-        (port as u32) + 2
-    } => ".hal";
+    unsafe fn default_ind(port: u16) -> u32 {
+        let mut val: u32 = 0;
+        asm!(
+            "in eax, dx",
+            in("dx") port,
+            out("eax") val,
+        );
+        val
+    } => ".hal.text";
 
-    fn default_outd(port: u16, _arg: u32) {
-        let _ = port;
-    } => ".hal";
+    unsafe fn default_outd(port: u16, arg: u32) {
+        asm!(
+            "out dx, eax",
+            in("dx") port,
+            in("eax") arg,
+        );
+    } => ".hal.text";
 }
 
 // Define HAL vector table section
@@ -41,12 +72,12 @@ relocate! {
 // TODO
 hal_vt_instance! {
     pub static HAL_VT: HalDispatches = {
-        inb: extern "C" fn(u16) -> u8 = default_inb,
-        outb: extern "C" fn(u16, u8) = default_outb,
-        inw: extern "C" fn(u16) -> u16 = default_inw,
-        outw: extern "C" fn(u16, u16) = default_outw,
-        ind: extern "C" fn(u16) -> u32 = default_ind,
-        outd: extern "C" fn(u16, u32) = default_outd,
+        inb: unsafe extern "C" fn(u16) -> u8 = default_inb,
+        outb: unsafe extern "C" fn(u16, u8) = default_outb,
+        inw: unsafe extern "C" fn(u16) -> u16 = default_inw,
+        outw: unsafe extern "C" fn(u16, u16) = default_outw,
+        ind: unsafe extern "C" fn(u16) -> u32 = default_ind,
+        outd: unsafe extern "C" fn(u16, u32) = default_outd,
     }; => ".vt_hal";
 }
 
@@ -60,7 +91,7 @@ pub extern "C" fn main(
     bootdev: u64,
     e820_map: &'static ArrayLike<'static, LongE820>,
 ) -> ! {
-    let mut a: u8 = HAL_VT.dispatch(|x| &x.inb, |&f| f(0x3f8));
+    let mut a: u8 = HAL_VT.dispatch(|x| &x.inb, |&f| unsafe { f(0x3f8) });
 
     loop {
         unsafe {

@@ -22,7 +22,7 @@ SECTIONS {
         KEEP(*(.vt_hal))
 
         . = ALIGN(16);
-        KEEP(*(.hal))
+        KEEP(*(.hal.text .hal.data))
 
         . = ALIGN(16);
         *(.text .text.*)
