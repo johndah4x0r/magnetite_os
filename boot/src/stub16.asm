@@ -9,9 +9,7 @@
 ; - Enable A20 gate
 ; - Load 32-bit GDT
 ; - Enter 32-bit protected mode
-;
-; TODO: implement CPU generation checks
-;
+;;
 ; Refer to 'boot/src/defs.asm' for memory layout
 
 ; (definitions included by 'boot/src/stub32.asm')
@@ -57,8 +55,48 @@ _stub16:
     ; Enforce flat addressing
     jmp 0:.vec
 .vec:
+    cld                                     ; Clear DF
     sti                                     ; Restore interrupts
     mov byte [bootdev], al                  ; Store boot drive number
+
+; Attach #UD to a custom handler
+attach_ud:
+    ; Load custom interrupt vector
+    ; - use `xchg` for external inspection
+    xor ax, ax                              ; Zero AX
+    lea si, [ud_handler]                    ; Point SI to custom handler
+    xchg [0x0018], si                       ; Load custom IP
+    xchg [0x001a], ax                       ; Load custom CS
+
+; Run a slew of illegal instructions to
+; enforce minimum CPU capability
+; - checks if `cpuid` works as intended,
+; as it raises a #UD on older CPUs
+cpu_check:
+    db 0x66                                 ; (operand size override)
+    pusha                                   ; Push all 32-bit GPRs
+
+    xor eax, eax                            ; Zero EAX (prefix implicit)
+    cpuid                                   ; Identify CPU
+
+    ; Store CPU authenticity string
+    mov [signature.low], ebx
+    mov [signature.mid], edx
+    mov [signature.high], ecx
+
+    db 0x66                                 ; (operand size override)
+    popa                                    ; Pop all 32-bit GPRs
+
+    ; Print vendor string to screen
+    mov bp, sp
+    push msgs.crlf
+    push signature
+    push msgs.got_id
+    call print
+
+    ; TODO
+
+    jmp e820_scan
 
 ; Scan for memory using E820
 e820_scan:
@@ -68,15 +106,19 @@ e820_scan:
     ; Perform LMA check (wiki.osdev.org)
     clc                                     ; Clear carry flag
     int 0x12                                ; Check LMA size using BIOS
-    jc panic                                ; Do not proceed if memory
+    jc .stop                                ; Do not proceed if memory
                                             ; size cannot be assessed
 
     cmp ax, 128                             ; Make sure we have at least 
                                             ; 128 kB of continuous memory
 
-    jl panic                                ; Do not proceed if LMA is
+    jge .cont                               ; Do not proceed if LMA is
                                             ; smaller than 128 kB
-
+    ; --- fall-through --- ;
+.stop:
+    mov si, msgs.e820
+    call panic
+.cont:
     lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
     xor esi, esi                            ; Zero entry count
     xor ebx, ebx                            ; Zero EBX
@@ -154,31 +196,119 @@ enter_pm:
 
     ; Perform far jump to segment 0x08 (described in the GDT)
     jmp gdt32.kern_cs:_stub32
-
     ; --- wishfull fall-through --- ;
+
+; Print error message and reset
+; - SI: pointer to reason string
 panic:
-    xchg bx, bx                              ; Breakpoint in Bochs
+    xchg bx, bx                             ; Breakpoint in Bochs
+
+    pop ax                                  ; Pop calling IP to AX
+    mov dx, cs                              ; Store CS in DX
+    call stringify_num                      ; Stringify CS:IP
 
     ; Write error string to screen
-    mov ah, 0x0e                            ; BIOS teletype function
-    mov si, errmsg                          ; Point to error message
-    sti                                     ; Enable all interrupts
+    mov bp, sp                              ; Store old value of SP
 
-.cont:
-    lodsb                                   ; Read 1 byte from SI, then shift
-    cmp al, 0                               ; End of string (zero-terminated)
-    je .done
-    int 0x10                                ; Call BIOS
-    jmp .cont                               ; Resume loop
-.done:
+    ; - push messages in reverse order
+    push msgs.reset                         ; Request to reset
+    push msgs.crlf                          ; Newline
+    push si                                 ; Provided reason
+    push msgs.reason                        ; Prelude
+    push msgs.crlf                          ; Newline
+    push numstr                             ; CS:IP string
+    push msgs.panic16                       ; Error message
+    push msgs.crlf                          ; Newline
+
+    call print                              ; Write pushed strings
+
+    sti                                     ; Enable all interrupts
     xor ax, ax                              ; Clear AX
     int 0x16                                ; Wait for keystroke
     int 0x19                                ; Reboot system
+    ; --- fall-through --- ;
 
-    ; If all else fails, force a triple fault
-    ; - use 0x7b00 as source
+    ; Provoke a triple fault
     lidt [0x7b00]
     int 0x00
 
-; Variables
-errmsg      db "Boot failed. Replace boot device and reset.", 0
+; Exception handler for #UD (INT 0x06)
+ud_handler:
+    xchg bx, bx                             ; Breakpoint
+
+    pop ax                                  ; Pop issuer IP
+    pop dx                                  ; Pop issuer CS
+    call stringify_num                      ; Stringify CS:IP
+
+    ; Load messages in reverse order
+    mov bp, sp
+    push msgs.crlf                          ; Newline
+    push numstr                             ; CS:IP string
+    push msgs.caught_ud                     ; Error message
+    push msgs.crlf                          ; Newline
+
+    call print                              ; Write pushed strings
+
+    xor bx, bx                              ; Zero BX
+    mov ax, not_supported                   ; Load custom vector
+    push bx                                 ; Push CS = 0
+    push ax                                 ; Push custom vector
+    iret                                    ; Return from interrupt
+not_supported:
+    mov si, msgs.unsup                      ; Load error message
+    call panic                              ; Panic
+
+; Print message pointed by stack arguments
+; - takes BP (pre-push SP)
+; - clobbers AX, CX, DX
+print:
+    sti                                     ; Enable interrupts
+    pop dx                                  ; Pop return IP
+    mov cx, bp                              ; Calculate entry count
+    sub cx, sp                              ; (1)
+    shr cx, 1                               ; (2)
+    mov ah, 0x0e                            ; BIOS teletype function
+.cont:
+    pop si                                  ; Pop entry
+.inner:
+    lodsb                                   ; Read 1 byte from [DS:SI], then shift
+    test al, al                             ; End of string (null-terminated)
+    jz .done
+    int 0x10                                ; Call BIOS
+    jmp .inner                              ; Resume loop
+.done:
+    loop .cont                              ; Parse more entries
+    push dx                                 ; Push return IP
+    ret                                     ; Return on exhaustion
+
+; Convert DX:AX to 8-digit hex string
+; - we'll use DX:AX for redundancy
+stringify_num:
+    pusha                                   ; Preserve GPRs
+    pushf                                   ; Preserve FLAGS
+    mov bx, ax                              ; Stringify AX
+    mov di, numstr.low                      ; Point to low string
+    call .conv
+
+    mov bx, dx                              ; Stringify DX
+    mov di, numstr.high                     ; Point to high string
+    call .conv
+
+    jmp .done
+.conv:
+    mov cx, 4
+.top:
+    ; Endianness is most certainly a
+    ; fun thing to deal with...
+    push bx                                 ; Save BX
+    shr bx, 12                              ; Capture highest nibble
+    lea si,  [numstr.chrset + bx]           ; Obtain character
+    pop bx                                  ; Restore BX
+    movsb                                   ; Write to buffer (increment DI)
+    shl bx, 4                               ; Discard highest nibble
+    loop .top                               ; Repeat loop (decrement CX)
+    ret
+.done:
+    popf                                    ; Restore FLAGS
+    popa                                    ; Restore GPRs
+    ret
