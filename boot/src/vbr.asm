@@ -58,6 +58,7 @@ FileSystem:         db "FAT16   "
 
 ; --- Main routine --- ;
 _start:
+    cli                                     ; Disable interrupts
     xchg bx, bx                             ; Breakpoint
 
     ; Enforce flat addressing
@@ -171,7 +172,9 @@ walk_root_dir:
     ; FIXME: key bug point
     lea si, [bp + FIRST_RD_SECTOR_LOW]      ; Point to first RD sector (LE encoding)
     lea di, [bp + DAP_LBA_LOW]              ; Point to LBA in DAP (LE encoding)
-    movsd                                   ; Copy 32-bit value
+
+    ; Copy 2 words
+    times 2 movsw
 
     ; CONTEXT 0
     ; - expect CX, DX, SI and DI to be clobbered
@@ -192,6 +195,7 @@ walk_root_dir:
     pusha                                   ; Save all GPRs
     call read_bootdev                       ; Read from boot drive
                                             ; (increments LBA by 2)
+    ; --- AX and DX clobbered --- ;
     popa                                    ; Restore all GPRs
 
     ; Calculate entries per sector to
@@ -257,10 +261,10 @@ parse_entry:
     jc .stop                                ; Give up on overflow
 
     mov [bp + DAP_BUF_OFFSET], di           ; Store target address in DAP
-    mov [bp + DAP_LBA_LOW], ax
-    mov [bp + DAP_LBA_MID_1], dx
+    mov [bp + DAP_LBA_LOW], ax              ; Store LBA low word
+    mov [bp + DAP_LBA_MID_1], dx            ; Store LBA low middle word
     call read_bootdev                       ; Read from boot drive
-
+    ; --- AX and DX clobbered --- ;
     xor dx, dx                              ; Zero DX
     mov ax, cx                              ; Store cluster size in AX
     mul word [BytesPerSector]               ; Multiply by sector size
@@ -324,6 +328,7 @@ parse_entry:
 
     mov [bp + DAP_BUF_OFFSET], di           ; Store value of DI in DAP
     call read_bootdev                       ; Read from bootdrive
+    ; --- AX and DX clobbered --- ;
 .read:
     mov ax, [read_buf + bx]                 ; Read cluster ID from calculated offset
     jmp .top                                ; Go back to top of loop
@@ -398,7 +403,7 @@ panic:
 
 ; Error messages
 ; NOTE: This consumes valuable space
-errmsg              db "PANIC", 0
+errmsg              db "ERR", 0
 
 ; Target file name (8.3)
 ; - zero-terminated for good measure

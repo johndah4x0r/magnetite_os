@@ -4,12 +4,12 @@
     'boot1.bin'
 */
 
-ENTRY(_stub16)                      /* make sure _stub32 exists */
+ENTRY(_stub16)                          /* make sure _stub32 exists */
 
 SECTIONS {
-    . = 0xf000;                     /* hard-coded entry point in definitions file */
+    . = 0xf000;                         /* hard-coded entry point in definitions file */
 
-    _start_offset = _start - .;     /* 32-bit offset to 64-bit entry */
+    _stub64_offset = _stub64 - .;       /* offset to 64-bit entry */
 
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
@@ -26,6 +26,6 @@ SECTIONS {
             second-class citizen
         */
         . = ALIGN(16);
-        *(.w_text)
+        *(.boot64.text .boot64.data)
     }
 }

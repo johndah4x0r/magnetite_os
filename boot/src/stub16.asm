@@ -27,10 +27,10 @@ _stub16:
     ; 1.  ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
     ; 2.  maybe-pointer to HAL vector table (here: NULL)
     ; 3.  NOP padding (90 90 90 90 90 90 90 90)
-    jmp dword .start
+    jmp word .start
     align 8, nop
 .handover_offset:
-    dd _start_offset, 0
+    dq _stub64_offset
 .vt_offset:
     dd NULL, NULL
 .pad:
@@ -68,11 +68,38 @@ attach_ud:
     xchg [0x0018], si                       ; Load custom IP
     xchg [0x001a], ax                       ; Load custom CS
 
-; Run a slew of illegal instructions to
-; enforce minimum CPU capability
-; - checks if `cpuid` works as intended,
-; as it raises a #UD on older CPUs
+; Check for CPU capability
 cpu_check:
+    ; Perform legal checks
+    ; (0) check for changes in high FLAGS
+    pushf                                   ; (2) Obtain original copy
+    pop dx                                  ; (1) (store in DX)
+
+    mov bx, dx                              ; (1) Obtain main copy
+    xor bh, 0x70                            ; (1) Toggle high bits
+    push bx                                 ; (2) Write modified FLAGS
+    popf                                    ; (1) (pop it back)
+
+    pushf                                   ; (2) Read back from FLAGS
+    pop bx                                  ; (1) Store it in BX
+
+    push dx                                 ; (1) Load original copy
+    popf                                    ; (0) Restore original state
+
+    and bh, 0x70                            ; Mask top nibble
+    and dh, 0x70                            ; Mask top nibble
+    cmp bh, dh                              ; Check whether the top bits have changed
+    jne .illegal                            ; Continue if change is detected
+    ; --- fall-through --- ;
+
+    mov si, msgs.unsup
+    call panic
+
+.illegal:
+    ; Run a slew of illegal instructions to
+    ; enforce minimum CPU capability
+    ; - checks if `cpuid` works as intended,
+    ; as it raises a #UD on older CPUs
     db 0x66                                 ; (operand size override)
     pusha                                   ; Push all 32-bit GPRs
 
@@ -88,10 +115,12 @@ cpu_check:
     popa                                    ; Pop all 32-bit GPRs
 
     ; Print vendor string to screen
-    mov bp, sp
-    push msgs.crlf
-    push signature
-    push msgs.got_id
+    mov bp, sp                              ; Store old SP in BP
+
+    ; - push messgaes in reverse order
+    push msgs.crlf                          ; Newline    
+    push signature                          ; Vendor string
+    push msgs.got_id                        ; Preamble
     call print
 
     ; TODO
@@ -145,7 +174,6 @@ e820_scan:
     ; --- fall-through --- ;
 .cleanup:
     pop edi
-    jmp .end
 .end:
     ; Store zero-extended base and entry count
     ; - If entry counts were to exceed

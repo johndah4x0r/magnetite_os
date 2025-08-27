@@ -15,8 +15,8 @@
 %include "boot/src/defs.asm"
 
 ; Define external labels
-extern _start                       ; Wrapped 64-bit code label
-extern _start_offset                ; Offset to _start (defined by linker)
+extern _stub64                      ; Wrapped 64-bit code label
+extern _stub64_offset               ; Offset to _start (defined by linker)
 
 ; Include 16-bit stub
 %include "boot/src/stub16.asm"
@@ -176,7 +176,7 @@ enable_lm:
     ; Load 64-bit GDT and perform far jump
     ; - for now, use identity mapping
     lgdt [gdt64.pointer]
-    jmp gdt64.code:_start
+    jmp gdt64.code:_stub64
 
     ; Halt in the event of a failure
     ; (unreachable)
