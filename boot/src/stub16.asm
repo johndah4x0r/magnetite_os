@@ -9,7 +9,7 @@
 ; - Enable A20 gate
 ; - Load 32-bit GDT
 ; - Enter 32-bit protected mode
-;;
+;
 ; Refer to 'boot/src/defs.asm' for memory layout
 
 ; (definitions included by 'boot/src/stub32.asm')
@@ -25,12 +25,12 @@ _stub16:
     ; 0a. (3) 16-bit near jump (e9 RR RR)
     ; 0b. (6) zero-extension (00 00 00 00 00 00)
     ; 1.  (3) zero padding (00 00 00)
-    ; 1.  (8) ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
+    ; 2.  (8) ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
     jmp word .start
 .pad:
     times 12-($-$$) db 0
 .handover_offset:
-    dd _start_offset, 0                     ; (offset provided by 'stub32.asm')
+    dd _stub64_offset, 0                    ; (offset provided by 'stub32.asm')
 .start:
     cli                                     ; FA - Kill interrupts
     xchg bx, bx                             ; 87 DB - Bochs breakpoint
@@ -64,11 +64,38 @@ attach_ud:
     xchg [0x0018], si                       ; Load custom IP
     xchg [0x001a], ax                       ; Load custom CS
 
-; Run a slew of illegal instructions to
-; enforce minimum CPU capability
-; - checks if `cpuid` works as intended,
-; as it raises a #UD on older CPUs
+; Check for CPU capability
 cpu_check:
+    ; Perform legal checks
+    ; (0) check for changes in high FLAGS
+    pushf                                   ; (2) Obtain original copy
+    pop dx                                  ; (1) (store in DX)
+
+    mov bx, dx                              ; (1) Obtain main copy
+    xor bh, 0x70                            ; (1) Toggle high bits
+    push bx                                 ; (2) Write modified FLAGS
+    popf                                    ; (1) (pop it back)
+
+    pushf                                   ; (2) Read back from FLAGS
+    pop bx                                  ; (1) Store it in BX
+
+    push dx                                 ; (1) Load original copy
+    popf                                    ; (0) Restore original state
+
+    and bh, 0x70                            ; Mask top nibble
+    and dh, 0x70                            ; Mask top nibble
+    cmp bh, dh                              ; Check whether the top bits have changed
+    jne .illegal                            ; Continue if change is detected
+    ; --- fall-through --- ;
+
+    mov si, msgs.unsup
+    call panic
+
+.illegal:
+    ; Run a slew of illegal instructions to
+    ; enforce minimum CPU capability
+    ; - checks if `cpuid` works as intended,
+    ; as it raises a #UD on older CPUs
     db 0x66                                 ; (operand size override)
     pusha                                   ; Push all 32-bit GPRs
 
@@ -84,10 +111,12 @@ cpu_check:
     popa                                    ; Pop all 32-bit GPRs
 
     ; Print vendor string to screen
-    mov bp, sp
-    push msgs.crlf
-    push signature
-    push msgs.got_id
+    mov bp, sp                              ; Store old SP in BP
+
+    ; - push messgaes in reverse order
+    push msgs.crlf                          ; Newline    
+    push signature                          ; Vendor string
+    push msgs.got_id                        ; Preamble
     call print
 
     ; TODO
@@ -141,7 +170,6 @@ e820_scan:
     ; --- fall-through --- ;
 .cleanup:
     pop edi
-    jmp .end
 .end:
     ; Store zero-extended base and entry count
     ; - If entry counts were to exceed

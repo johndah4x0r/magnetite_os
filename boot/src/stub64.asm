@@ -7,16 +7,13 @@
 ; the secondary (tertiary?) stage to be
 ; independent of initial position.
 
-global _start           ; Global export of _start
+global _stub64          ; Global export of _stub64
 extern main             ; Import of Rust 'main' routine
 
 NULL    equ 0           ; Null pointer
 
 section .stub64
-; Use '_start' to appease linker, and to
-; assert the importance of this stub for
-; 64-bit operation of the bootloader
-_start:
+_stub64:
     ; Header (like, c'mon?)
     ; 0.  (9) 64-bit near jump (e9 RR RR RR RR RR? RR? RR? RR?)
     ; 1.  (3) zero padding (00 00 00)
