@@ -63,6 +63,62 @@ macro_rules! relocate {
         relocate! { $($rest)* }
     };
 
+    // Unsafe function with args and return type
+    (
+        $vis:vis unsafe fn $name:ident ( $($arg:ident : $arg_ty:ty),* ) -> $ret:ty $body:block
+        => $section:literal;
+        $($rest:tt)*
+    ) => {
+        #[unsafe(no_mangle)]
+        #[unsafe(link_section = $section)]
+        #[inline(never)]
+        $vis unsafe extern "C" fn $name($($arg: $arg_ty),*) -> $ret $body
+
+        relocate! { $($rest)* }
+    };
+
+    // Unsafe function with no args and return type
+    (
+        $vis:vis unsafe fn $name:ident () -> $ret:ty $body:block
+        => $section:literal;
+        $($rest:tt)*
+    ) => {
+        #[unsafe(no_mangle)]
+        #[unsafe(link_section = $section)]
+        #[inline(never)]
+        $vis unsafe extern "C" fn $name() -> $ret $body
+
+        relocate! { $($rest)* }
+    };
+
+    // Unsafe function with no args
+    (
+        $vis:vis unsafe fn $name:ident() $body:block
+        => $section:literal;
+        $($rest:tt)*
+    ) => {
+        #[unsafe(no_mangle)]
+        #[unsafe(link_section = $section)]
+        #[inline(never)]
+        $vis unsafe extern "C" fn $name() $body
+
+        relocate! { $($rest)* }
+    };
+
+    // Unsafe function with args
+    (
+        $vis:vis unsafe fn $name:ident ( $($arg:ident : $arg_ty:ty),* ) $body:block
+        => $section:literal;
+        $($rest:tt)*
+    ) => {
+        #[unsafe(no_mangle)]
+        #[unsafe(link_section = $section)]
+        #[inline(never)]
+        $vis unsafe extern "C" fn $name($($arg : $arg_ty),*) $body
+
+        relocate! { $($rest)* }
+    };
+
     // `static` item
     (
         $vis:vis static $name:ident : $ty:ty = $value:expr;
