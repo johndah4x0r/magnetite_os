@@ -48,36 +48,10 @@ _stub32:
     mov [e820_map.low], eax     ; E820 map location
     mov [oem_label.low], ebx    ; BPB location
 
-; Check if CPUID is present
-check_cpuid:
-    pushfd                      ; Copy EFLAGS into stack
-    pop eax                     ; Store EFLAGS into EAX
-
-    mov ecx, eax                ; Store copy of EFLAGS
-
-    ; Attempt to flip the ID bit in EFLAGS
-    xor eax, ID_EFLAGS          ; Flip bit 21
-    push eax                    ; Store modified EFLAGS
-    popfd                       ; Copy from stack
-
-    pushfd                      ; Copy EFLAGS into stack
-    pop eax                     ; Store EFLAGS into EAX
-
-    ; Restore EFLAGS to its original state
-    push ecx                    ; Store original EFLAGS
-    popfd
-
-    ; Make sure that the ID bit is flipped
-    cmp eax, ecx
-    jne .end
-
-    ; --- fall-through --- ;
-    ; Panic if CPUID is in fact not present
-    lea esi, [msgs.no_cpuid]    ; Load pointer to reason
-    jmp panicb                  ; Panic - never to return...
-.end:
-
 ; Check if long mode is supported
+; - CPUID is assumed to be supported,
+; as its existence should have been
+; tested by brute force
 check_lm:
     ; Check if CPUID supports extended features
     mov eax, EXT_CPUID          ; Check highest EAX parameter
@@ -309,9 +283,31 @@ gdt64:
 
 ; Null-terminated messages
 msgs:
+    .panic16    db "Loader panicked while in 16-bit mode; CS:IP = ", 0
     .panic      db "Loader panicked while in 32-bit PM. Reason: ", 0
-    .no_cpuid   db "CPU appears to not support CPUID", 0
-    .no_lm      db "CPU appears to not support x86-64 long mode", 0
+    .reason     db "Reason: ", 0
+    .unsup      db "CPU older than i486, or otherwise unsupported", 0
+    .no_lm      db "CPU does not support x86-64 long mode", 0
+    .got_id     db "CPU vendor string: ", 0
+    .caught_ud  db "Caught #UD at CS:IP = ", 0
+    .e820       db "Failed to generate memory layout map", 0
+    .reset      db "Replace boot device, and press <Enter> to reset", 0
+    .crlf       db 0x0a, 0x0d, 0
+
+; Nibble characters
+numstr:
+    .high       db "yyyy"
+    .delim      db ":"
+    .low        db "xxxx"
+    .null       db 0
+    .chrset     db "0123456789abcdef"
+
+; Signature obtained from CPUID
+signature:
+    .low        dd 0
+    .mid        dd 0
+    .high       dd 0
+    .null       db 0
 
 ; Pointer to BPB (32-bit pointer extended to 64-bit)
 oem_label:
