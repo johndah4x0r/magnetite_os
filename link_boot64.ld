@@ -19,7 +19,7 @@ SECTIONS {
 
         /* offset is guaranteed to be positive */
         __hal_offset = .;
-        KEEP(*(.vt_hal))
+        KEEP(*(.hal.vt))
 
         . = ALIGN(16);
         KEEP(*(.hal.text .hal.data))

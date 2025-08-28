@@ -4,12 +4,16 @@
 */
 
 pub mod wrappers;
-use wrappers::{HalVtableEntry, HalVtableEntryWriter};
+use core::ptr::Thin;
+use core::ptr::write_volatile;
+use core::sync::atomic::AtomicUsize;
+use wrappers::HalVtableEntry;
 
+use core::arch::asm;
 use core::convert::TryFrom;
 use core::marker::{PhantomData, Sync};
 use core::mem;
-use core::ops;
+use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicIsize, Ordering};
 
 // Fat "pointer" to an immutable
@@ -178,6 +182,7 @@ pub trait HalVectorTable {}
 //   at all
 #[repr(C)]
 pub struct HalVtableAC<V: HalVectorTable> {
+    base: AtomicUsize,
     count: AtomicIsize,
     vt: V,
 }
@@ -185,20 +190,131 @@ pub struct HalVtableAC<V: HalVectorTable> {
 impl<V: HalVectorTable> HalVtableAC<V> {
     // Create new instance of 'HalVtableAC'
     pub const fn new(count: AtomicIsize, vt: V) -> Self {
-        HalVtableAC { count, vt }
+        HalVtableAC {
+            base: AtomicUsize::new(0),
+            count,
+            vt,
+        }
+    }
+
+    // Set internal base
+    #[inline(never)]
+    pub fn initialize(&self) -> Result<usize, usize> {
+        let base = &self.base as *const _ as usize;
+        // Output breakpoint and result
+        unsafe {
+            asm!(
+                "xchg bx, bx",
+                "xchg r8, r8",
+                in("r8") base,
+            );
+        }
+
+        // Set the base, but only if
+        // it is currently unset
+        let old_base = self.base.load(Ordering::Acquire);
+        if old_base == 0 {
+            self.base.store(base, Ordering::Release);
+            Ok(base)
+        } else {
+            // Return old base
+            Err(old_base)
+        }
+    }
+
+    // Translate provided pointer-like object,
+    // so that relative offsets match
+    #[inline(never)]
+    fn translate<P: Thin + Copy>(&self, old_ptr: P) -> Result<P, ()> {
+        // Obtain old and new base
+        let old_base = self.base.load(Ordering::Acquire);
+        let new_base = &self.base as *const _ as usize;
+
+        // Do not perform translation if the bases match
+        if new_base == old_base {
+            return Ok(old_ptr);
+        }
+
+        // Nor should we perform translation
+        // if the old base is unset
+        if old_base == 0 {
+            return Err(());
+        }
+
+        // Perform pointer-level aliasing
+        // SAFETY: As `P` is supposedly thin, it
+        // should be relatively safe to transmute
+        // it to `*const ()`
+        let p = &old_ptr as *const _ as *const *const ();
+
+        // Output breakpoint and result
+        unsafe {
+            asm!(
+                "xchg bx, bx",
+                "xchg r8, r8",
+                in("r8") p as usize,
+            );
+        }
+
+        // Obtain linear address
+        // SAFETY: (see above)
+        let old_addr = unsafe { read_volatile(p) as usize };
+
+        // Output breakpoint and result
+        unsafe {
+            asm!(
+                "xchg bx, bx",
+                "xchg r9, r9",
+                in("r9") old_addr,
+            );
+        }
+
+        // Calculate absolute offset
+        let abs_offset: usize = old_addr.abs_diff(old_base);
+
+        // - do not proceed if we can't even
+        // perform signed arithmetic
+        if abs_offset > (isize::MAX as usize) {
+            return Err(());
+        }
+
+        // Calculate signed offset
+        // - start by assuming a positive offset
+        let mut offset = abs_offset as isize;
+
+        // - determine offset sign
+        if old_addr < old_base {
+            offset *= -1;
+        }
+
+        // Calculate new pointer
+        if let Some(new_addr) = new_base.checked_add_signed(offset) {
+            // - perform pointer-level aliasing
+            // SAFETY: As `P` is supposedly thin,
+            // it should be relatively safe to
+            // derive it from `*const ()`
+            let p = &new_addr as *const _ as *const P;
+
+            // - obtain new pointer
+            // SAFETY: (see above)
+            Ok(unsafe { read_volatile(p) })
+        } else {
+            Err(())
+        }
     }
 
     // Dispatch routine using provided selector closure,
     // and execute it using provided action closure
     // FIXME: What even is this cursed contract?
-    pub fn dispatch<S, A, F, R>(&self, selector: S, action: A) -> R
+    #[inline(never)]
+    pub fn dispatch<S, A, F, R>(&self, selector: S, action: A) -> Result<R, ()>
     where
         S: FnOnce(&V) -> &HalVtableEntry<F>,
-        A: FnOnce(&F) -> R,
-        F: Copy,
+        A: FnOnce(F) -> R,
+        F: Thin + Copy,
     {
         // Maybe-cells for later use
-        let mut maybe_f: Option<F> = None;
+        let maybe_f: Option<F>;
         let mut maybe_r: Option<R> = None;
 
         // Step 1 - acquire lock
@@ -229,28 +345,33 @@ impl<V: HalVectorTable> HalVtableAC<V> {
 
         // Step 3 - perform provided action
         if let Some(f) = maybe_f {
-            maybe_r = Some(action(&f));
+            let new_f = self.translate(f)?;
+            maybe_r = Some(action(new_f));
         }
 
         // Step 4 - release lock
         self.count.fetch_sub(1, Ordering::Release);
 
         // Step 5 - return
-        maybe_r.unwrap()
+        if let Some(r) = maybe_r {
+            Ok(r)
+        } else {
+            Err(())
+        }
     }
 
     // Modify VT entry using selector closure
     // and provided vector
     // - we'll trust that the entries in
     //   question are internally mutable
-    pub fn modify<S, F>(&self, selector: S, vector: F)
+    pub fn modify<S, F>(&self, selector: S, vector: F) -> Result<(), ()>
     where
         S: FnOnce(&V) -> &HalVtableEntry<F>,
-        F: Copy,
+        F: Thin + Copy,
     {
         // Step 1 - acquire lock
         loop {
-            // - attempt to increment read count
+            // - attempt to acqure write lock
             if self
                 .count
                 .compare_exchange(0, -1, Ordering::AcqRel, Ordering::Acquire)
@@ -262,9 +383,8 @@ impl<V: HalVectorTable> HalVtableAC<V> {
                 // one field, they should be binary-
                 // compatible with one another.
                 unsafe {
-                    let v_ptr = selector(&self.vt).get_cell() as *const HalVtableEntryWriter<F>;
-
-                    (&*v_ptr).store(vector);
+                    let v_ptr = self.translate(selector(&self.vt).get())?;
+                    write_volatile(v_ptr, vector);
                 }
 
                 break;
@@ -275,31 +395,9 @@ impl<V: HalVectorTable> HalVtableAC<V> {
 
         // Step 3 - release lock
         self.count.store(0, Ordering::Release);
+
+        Ok(())
     }
 }
 
 unsafe impl<V: HalVectorTable> Sync for HalVtableAC<V> {}
-
-// HAL VT entry lock (deprecated?)
-pub struct HalVtableEntryLock<'a, F: Copy> {
-    count: &'a AtomicIsize,
-    entry: &'a HalVtableEntry<F>,
-}
-
-// Implement transparent dereferencing
-impl<F: Copy> ops::Deref for HalVtableEntryLock<'_, F> {
-    type Target = HalVtableEntry<F>;
-
-    fn deref(&self) -> &Self::Target {
-        self.entry
-    }
-}
-
-// Implement lock reduction on destruction
-// - why do we need mutability again?
-impl<F: Copy> ops::Drop for HalVtableEntryLock<'_, F> {
-    fn drop(&mut self) {
-        // Decrease reader count
-        self.count.fetch_sub(1, Ordering::Release);
-    }
-}
