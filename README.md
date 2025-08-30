@@ -3,6 +3,7 @@ This project is currently divided into two sub-projects (interactive - links are
 - [`magnetite_os/boot`](boot/) - **(WIP)** custom legacy bootloader written 
     in assembler and Rust 
 - [`magnetite_os/kern`](kern/) - **(planned)** kernel written in Rust
+- [`magnetite_os/DECISIONS`](DECISIONS/) - decisions record
 
 ## Testing
 TODO
