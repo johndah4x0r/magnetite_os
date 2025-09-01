@@ -1,9 +1,15 @@
 #![no_std]
 #![no_main]
 
+// Shared resources module
+#[path = "../../common/mod.rs"]
+mod common;
+
+// Local modules
 mod macros;
 mod structs;
 
+// Definition uses
 use core::panic::PanicInfo;
 use structs::{ArrayLike, BiosPB, LongE820};
 
