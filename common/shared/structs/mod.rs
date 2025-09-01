@@ -1,0 +1,3 @@
+/*
+    General platform-agnostic structures
+*/

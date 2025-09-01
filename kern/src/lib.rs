@@ -1,14 +1,23 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+#![no_std]
+#![no_main]
+
+// Shared resources module
+#[path = "../../common/mod.rs"]
+mod common;
+
+// Definition uses
+use core::panic::PanicInfo;
+
+// Initial routine
+//  - call it 'main' for the sake of brevity
+// TODO
+#[inline(never)]
+#[unsafe(no_mangle)]
+pub extern "C" fn main() -> ! {
+    loop {}
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[panic_handler]
+fn panic(_info: &PanicInfo<'_>) -> ! {
+    loop {}
 }
