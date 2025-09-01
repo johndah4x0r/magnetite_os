@@ -1,8 +1,10 @@
 /boot/target/
 /kern/target/
+/common/target/
 
 /boot/Cargo.lock
 /kern/Cargo.lock
+/common/Cargo.lock
 
 /target
 /Cargo.lock
