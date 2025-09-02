@@ -7,7 +7,7 @@
 */
 
 // Platform-agnostic definitions
-mod shared;
+pub mod shared;
 
 // Platform-specific definitions
-mod arch;
+pub mod arch;

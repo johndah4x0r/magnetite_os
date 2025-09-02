@@ -7,5 +7,8 @@
     and must be guarded off whenever possible.
 */
 
+// Platform-agnostic macros
+pub mod macros;
+
 // General structures
 pub mod structs;
