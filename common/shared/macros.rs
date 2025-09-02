@@ -1,4 +1,6 @@
 /*
+    A module containing platform-agnostic macros
+
     The macros here are mostly auto-generated.
     Expect therefore unseen inconsistencies.
 */
