@@ -14,3 +14,6 @@ include!("volatile.rs");
 
 // Array-like fat pointer type
 include!("array_like.rs");
+
+// fat UART port type
+include!("uart.rs");
