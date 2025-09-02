@@ -5,13 +5,12 @@
 #[path = "../../common/mod.rs"]
 mod common;
 
-// Local modules
-mod macros;
-mod structs;
-
 // Definition uses
+use common::shared::structs::ArrayLike;
 use core::panic::PanicInfo;
-use structs::{ArrayLike, BiosPB, LongE820};
+
+// - x86-specific structures
+use common::arch::x86::structs::{BiosPB, LongE820};
 
 // Initial routine
 //  - call it 'main' for the sake of brevity

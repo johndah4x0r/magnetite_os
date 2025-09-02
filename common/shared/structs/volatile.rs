@@ -1,7 +1,5 @@
 /*
-    Wrapper structs that can be expected to be
-    fully or partially binary-compatible with
-    the wrapped types
+    An include file defining the volatile cell wrapper type
 */
 
 use core::cell::UnsafeCell;
