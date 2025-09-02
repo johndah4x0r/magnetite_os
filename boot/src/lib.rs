@@ -2,8 +2,7 @@
 #![no_main]
 
 // Shared resources module
-#[path = "../../common/mod.rs"]
-mod common;
+extern crate common;
 
 // Definition uses
 use common::shared::structs::ArrayLike;

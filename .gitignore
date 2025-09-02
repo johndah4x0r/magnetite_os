@@ -1,8 +1,6 @@
-/boot/target/
-/kern/target/
+/*/target/
 
-/boot/Cargo.lock
-/kern/Cargo.lock
+/*/Cargo.lock
 
 /target
 /Cargo.lock
