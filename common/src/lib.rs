@@ -8,9 +8,12 @@
 
 #![no_std]
 #![no_main]
+#![feature(negative_impls)]
+#![feature(associated_type_defaults)]
 
 // Platform-agnostic definitions
 pub mod shared;
 
 // Platform-specific definitions
+// - will expose auto-selected `_this`
 pub mod arch;
