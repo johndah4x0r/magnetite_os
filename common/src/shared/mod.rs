@@ -12,3 +12,6 @@ pub mod macros;
 
 // General structures
 pub mod structs;
+
+// Contract traits
+pub mod traits;
