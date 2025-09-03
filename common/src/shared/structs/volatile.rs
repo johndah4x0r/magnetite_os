@@ -18,6 +18,12 @@ use core::sync::atomic::Ordering;
 pub struct VolatileCell<T>(UnsafeCell<T>);
 
 impl<T: Copy> VolatileCell<T> {
+    // Create new instance of `VolatileCell`
+    pub const fn new(val: T) -> Self {
+        VolatileCell(
+            UnsafeCell::new(val)
+        )
+    }
     // Perform volatile read
     // This should be safe, as we own the
     // internal cell - safety hinges on 'T'
@@ -42,7 +48,7 @@ impl<T: Copy> VolatileCell<T> {
     // or 'Clone'
     // - immutable 'self' for statics
     #[inline(always)]
-    pub unsafe fn store(&self, val: T) {
+    pub fn store(&self, val: T) {
         atomic::fence(Ordering::Release);
         unsafe {
             // - obtain pointer from inner cell, then write
