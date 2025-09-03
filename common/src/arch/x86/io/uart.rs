@@ -1,27 +1,30 @@
 /*
     UART driver module for x86
 
-    The UART only supports byte-sized operations,
-    and this module suppors PIO only.
+    This module only supports PIO and byte-wise I/O, as the
+    UART only supports a maximum word width of 8 bits, in
+    addition to parity and stop bits.
 
-    TODO: implement `Read` and `Write`
+    TODO: implement detailed error types
 */
 
 // Use internal definitions
 use crate::arch::x86::io::{in_b, out_b};
-use crate::shared::structs::UartPort;
+use crate::shared::structs::{UartPort, VolatileCell};
+use crate::shared::traits::{Read, Write, CharDevice, LockableDevice};
 
 // Defintion uses
 use core::hint::spin_loop;
+use core::ops::Drop;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::marker::PhantomData;
 
-// Default UART ports in x86
-// - count from zero
-pub const UART_PORTS: [UartPort; 4] = [
-    UartPort::new(0, 0x3f8),
-    UartPort::new(1, 0x2f8),
-    UartPort::new(2, 0x3e8),
-    UartPort::new(3, 0x2e8),
-];
+// Port base addresses
+// - count from COM1
+pub const BASE_COM1: usize = 0x3f8;
+pub const BASE_COM2: usize = 0x2f8;
+pub const BASE_COM3: usize = 0x3e8;
+pub const BASE_COM4: usize = 0x2e8;
 
 // Register addresses (relative to base)
 pub const RX_BUF: usize = 0;
@@ -49,6 +52,30 @@ pub const BREAK_IND: u8 = 1 << 4;
 pub const THR_EMPTY: u8 = 1 << 5;
 pub const TX_EMPTY: u8 = 1 << 6;
 pub const IMPEND_ERR: u8 = 1 << 7;
+
+pub const LCR_DLAB: u8 = 1 << 7;
+pub const LCR_8N1: u8 = (1 << 1) | (1 << 0);
+
+pub const LCR_8N1_NO_DLAB: u8 = LCR_8N1;
+
+// MCR mode constants
+pub const MCR_RTS_DSR: u8 = 0x03;
+pub const MCR_LOOPBACK: u8 = 0x1e;
+
+// FIFO CR value
+// - enable FIFOs
+// - clear FIFOs,
+// - set interrupt level to 14 bytes
+pub const FIFO_CR_VAL: u8 = 0xc7;
+
+// Default UART ports in x86
+// - count from zero
+pub const UART_PORTS: [UartPort; 4] = [
+    UartPort::new(0, BASE_COM1),
+    UartPort::new(1, BASE_COM2),
+    UartPort::new(2, BASE_COM3),
+    UartPort::new(3, BASE_COM4),
+];
 
 // Read from Line Status Register
 #[inline(always)]
@@ -180,11 +207,11 @@ fn is_err_set(port: UartPort) -> bool {
 
 // Read to byte array
 // - stops on source exhaustion OR target overrun
-// - returns bytes read, regardless of outcome
+// - returns bytes read on success
 // TODO: serial I/O usually never fails, but there
 // might be edge cases that we have failed to take
 // into account...
-fn read_bytes(port: UartPort, buf: &mut [u8], wait: bool, fill: bool) -> Result<usize, usize> {
+fn read_bytes(port: UartPort, buf: &mut [u8], wait: bool, fill: bool) -> Result<usize, ()> {
     // Count number of bytes read
     // - use as start-from-zero index
     let mut num_bytes: usize = 0;
@@ -198,11 +225,21 @@ fn read_bytes(port: UartPort, buf: &mut [u8], wait: bool, fill: bool) -> Result<
     // Break on source exhaustion (maskable)
     // OR target overrun, whichever happens
     // first
-    while (is_dr_set(port) || fill) && (num_bytes < buf_size) && (!is_err_set(port)) {
+    while (is_dr_set(port) || fill) && (num_bytes < buf_size) {
+        // Break on error
+        if is_err_set(port) {
+            return Err(());
+        }
+
         // Wait ONLY if `fill == true` OR
         // if `wait == true`
         if fill || wait {
             wait_dr_set(port);
+        }
+
+        // Break on error
+        if is_err_set(port) {
+            return Err(());
         }
 
         buf[num_bytes] = unsafe { in_b(port_num) };
@@ -214,11 +251,11 @@ fn read_bytes(port: UartPort, buf: &mut [u8], wait: bool, fill: bool) -> Result<
 
 // Write from byte array
 // - stops on source exhaustion OR target overrun
-// - returns bytes read, regardless of outcome
+// - returns bytes read on success
 // TODO: serial I/O is usually reliable, but there
 // might be edge cases that we have failed to take
 // into account...
-fn write_bytes(port: UartPort, buf: &[u8], wait: bool, consume: bool) -> Result<usize, usize> {
+fn write_bytes(port: UartPort, buf: &[u8], wait: bool, consume: bool) -> Result<usize, ()> {
     // Count number of bytes written
     // - use as start-from-zero index
     let mut num_bytes: usize = 0;
@@ -231,32 +268,60 @@ fn write_bytes(port: UartPort, buf: &[u8], wait: bool, consume: bool) -> Result<
 
     // Break on source exhaustion OR target
     // overrun, whichever happens first
-    while (is_thre_set(port) || consume) && (num_bytes < buf_size) && (!is_err_set(port)) {
+    while (is_thre_set(port) || consume) && (num_bytes < buf_size) {
+        // Break on error
+        if is_err_set(port) {
+            return Err(());
+        }
+
         // Wait ONLY if `conume == true` OR
         // if `wait == true`
         if consume || wait {
             wait_thre_set(port);
         }
 
+        // Break on error
+        if is_err_set(port) {
+            return Err(());
+        }
+
         unsafe {
             out_b(port_num, buf[num_bytes]);
         }
+
         num_bytes += 1;
     }
 
     Ok(num_bytes)
 }
 
-// Abstract polling UART instance
-// - assumes explicit mutability
-pub struct PollingUart {
-    port: Option<UartPort>,
+// Initialization error types
+pub enum InitError {
+    ZeroBaudRate,
+    InvalidDivisor,
+    LoopbackError,
+    Uninitialized,
 }
 
-impl PollingUart {
+// Abstract polling UART instance
+// - uses interior mutability
+// - cannot be read from or written
+// to directly; must be locked for
+// exclusive I/O
+pub struct PollingUart<'a> {
+    port: VolatileCell<Option<UartPort>>,
+    _lock: AtomicBool,
+    _marker: PhantomData<&'a AtomicBool>,
+}
+
+impl PollingUart<'_> {
     // Create uninitialized UART instance
     pub const fn new() -> Self {
-        PollingUart { port: None }
+        PollingUart {
+            port: VolatileCell::new(None),
+            _lock: AtomicBool::new(false),
+            _marker: PhantomData,
+        }
     }
 
     // Initializes UART instance using
@@ -265,35 +330,21 @@ impl PollingUart {
     // - the baud rate must be an integer
     // fraction of `BAUD_RATE` (115,200 baud)
     // - returns `Ok(())` on success
-    pub fn initialize(&mut self, port: UartPort, rate: Option<usize>) -> Result<(), ()> {
+    pub fn initialize(&self, port: UartPort, rate: Option<usize>) -> Result<(), InitError> {
         // Calculate rate divisor
-        let divisor: u16;
-
-        if let Some(r) = rate {
-            // - forbid zero rate
-            if r == 0 {
-                return Err(());
-            }
-
-            // - divisibility WILL be enforced
-            if BAUD_RATE % r != 0 {
-                return Err(());
-            }
-
-            // - alias to 16-bit integer, as
-            // the divisor registers only accept
-            // one byte (8 bits) each
-            divisor = (BAUD_RATE / r) as u16;
-        } else {
-            divisor = 1;
-        }
+        let divisor: u16 = match rate {
+            Some(0) => return Err(InitError::ZeroBaudRate),
+            Some(r) if BAUD_RATE % r != 0 => return Err(InitError::InvalidDivisor),
+            Some(r) => (BAUD_RATE / r) as u16,
+            None => 1,
+        };
 
         // Clear interrupts
         // - return value reserved for future use
         let _ = exchange_int(port, 0x00);
 
         // Enable DLAB
-        store_lcr(port, 0x80);
+        store_lcr(port, LCR_DLAB);
 
         // Set divisor
         // - trust LE encoding
@@ -306,32 +357,134 @@ impl PollingUart {
         }
 
         // Set encoding to 8/N/1, clearing DLAB
-        store_lcr(port, 0x03);
+        store_lcr(port, LCR_8N1_NO_DLAB);
 
         // Write to FIFO CR
         // - enable FIFO, clear FIFOs, interrupt at 14 bytes
         unsafe {
-            out_b((port.addr + FIFO_CR) as u16, 0xc7);
+            out_b((port.addr + FIFO_CR) as u16, FIFO_CR_VAL);
         }
 
         // Set RTS+DSR, then set in loopback mode
-        store_mcr(port, 0x03);
-        store_mcr(port, 0x1e);
+        store_mcr(port, MCR_RTS_DSR);
+        store_mcr(port, MCR_LOOPBACK);
 
         // Write to TX buffer
         unsafe {
             out_b((port.addr + TX_BUF) as u16, 0xae);
         }
 
+        // Return to normal operation
+        store_mcr(port, MCR_RTS_DSR);
+
         // Check if serial returns sent byte
         let val = unsafe { in_b((port.addr + RX_BUF) as u16) };
         if val != 0xae {
-            Err(())
+            Err(InitError::LoopbackError)
         } else {
             // Set internal port
-            self.port = Some(port);
+            // - `self.port` has interior mutability
+            self.port.store(Some(port));
 
             Ok(())
         }
     }
+
+    // Obtain exclusive lock
+    #[inline(always)]
+    fn obtain_lock(&self) {
+        loop {
+            match self
+                ._lock
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
+            {
+                Ok(true) => {
+                    break;
+                }
+                _ => {
+                    spin_loop();
+                }
+            }
+        }
+    }
+
+    // Release exclusive lock
+    // - the operation is safe in theory, but
+    // opening for race cond
+    unsafe fn release_lock(&self) {
+        self._lock.store(false, Ordering::Release);
+    }
 }
+
+impl !CharDevice<'_> for PollingUart<'_> {}
+impl<'a> LockableDevice<'a> for PollingUart<'a> {
+    type GuardType = PollingUartGuard<'a>;
+    type Error = InitError;
+
+    // Locks UART instance and returns guard type
+    // with I/O traits, but only if the instance
+    // has been initialized
+    fn lock(&'a self) -> Result<Self::GuardType, Self::Error> {
+        // Obtain exclusive lock
+        self.obtain_lock();
+
+        // Check if the instance has been correctly instantiated
+        if let Some(port) = self.port.load() {
+            Ok(PollingUartGuard {
+                port,
+                lock: &self._lock,
+            })
+        } else {
+            // Release exclusive lock
+            unsafe {
+                self.release_lock();
+            }
+
+            Err(InitError::Uninitialized)
+        }
+    }
+}
+
+// Guard type for `PollingUart`
+// - the only type allowed to implement
+// read and write access, as it is owned
+// entirely by the instantiating scope
+pub struct PollingUartGuard<'a> {
+    port: UartPort,
+    lock: &'a AtomicBool,
+}
+
+// - implement read operations
+// TODO: expand operations
+impl Read for PollingUartGuard<'_> {
+    type ReadError = ();
+
+    // Pull some bytes from serial input
+    fn read(&self, buf: &mut [u8]) -> Result<usize, ()> {
+        // Read with waiting and without filling
+        read_bytes(self.port, buf, true, false)
+    }
+}
+
+// - implement write operations
+// TODO: expand operations
+impl Write for PollingUartGuard<'_> {
+    type WriteError = ();
+
+    // Write some bytes to serial output
+    fn write(&self, buf: &[u8]) -> Result<usize, ()> {
+        // Write with waiting and without consuming
+        write_bytes(self.port, buf, true, false)
+    }
+}
+
+// - implement automatic lock release
+impl Drop for PollingUartGuard<'_> {
+    fn drop(&mut self) {
+        self.lock.store(false, Ordering::Release);
+    }
+}
+
+// - mark type as a character device
+impl CharDevice<'_> for PollingUartGuard<'_> {}
+impl !LockableDevice<'_> for PollingUartGuard<'_> {}

@@ -10,7 +10,19 @@
     must still be present at the source level.
 */
 
+// Define macro for exposing platform-specific submodules
+macro_rules! arch_mod {
+    ($cfg:meta, $real_mod:ident) => {
+        #[$cfg]
+        pub mod $real_mod;
+
+        #[$cfg]
+        pub mod _this {
+            use super::$real_mod::*;
+        }
+    };
+}
+
 // Definitions specific to the IA-32 and x86-64
 // platforms (known collectively as x86)
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub mod x86;
+arch_mod!(cfg(any(target_arch = "x86", target_arch = "x86_64")), x86);
