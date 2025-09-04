@@ -17,8 +17,8 @@ macro_rules! arch_mod {
         pub mod $real_mod;
 
         #[$cfg]
-        pub mod _this {
-            use super::$real_mod::*;
+        pub mod __arch {
+            pub use super::$real_mod::*;
         }
     };
 }

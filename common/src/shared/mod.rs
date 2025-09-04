@@ -15,3 +15,6 @@ pub mod structs;
 
 // Contract traits
 pub mod traits;
+
+// I/O operations
+pub mod io;
