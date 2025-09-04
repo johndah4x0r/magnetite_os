@@ -10,14 +10,15 @@
 
 // Use internal definitions
 use crate::arch::x86::io::{in_b, out_b};
-use crate::shared::structs::{UartPort, VolatileCell};
+use crate::shared::io::uart::UartPort;
+use crate::shared::structs::VolatileCell;
 use crate::shared::traits::{Read, Write, CharDevice, LockableDevice};
 
 // Defintion uses
 use core::hint::spin_loop;
 use core::ops::Drop;
 use core::sync::atomic::{AtomicBool, Ordering};
-use core::marker::PhantomData;
+use core::marker::{Sync, PhantomData};
 
 // Port base addresses
 // - count from COM1
@@ -70,7 +71,7 @@ pub const FIFO_CR_VAL: u8 = 0xc7;
 
 // Default UART ports in x86
 // - count from zero
-pub const UART_PORTS: [UartPort; 4] = [
+pub const RAW_UART_PORTS: [UartPort; 4] = [
     UartPort::new(0, BASE_COM1),
     UartPort::new(1, BASE_COM2),
     UartPort::new(2, BASE_COM3),
@@ -303,24 +304,41 @@ pub enum InitError {
     Uninitialized,
 }
 
+// Port initialization status
+#[repr(usize)]
+#[derive(Debug, Copy, Clone)]
+pub enum PortInit {
+    Uninit(UartPort),
+    Init(UartPort),
+}
+
 // Abstract polling UART instance
 // - uses interior mutability
 // - cannot be read from or written
 // to directly; must be locked for
 // exclusive I/O
 pub struct PollingUart<'a> {
-    port: VolatileCell<Option<UartPort>>,
+    port: VolatileCell<PortInit>,
     _lock: AtomicBool,
     _marker: PhantomData<&'a AtomicBool>,
 }
 
 impl PollingUart<'_> {
     // Create uninitialized UART instance
-    pub const fn new() -> Self {
+    pub const fn new(port: UartPort) -> Self {
         PollingUart {
-            port: VolatileCell::new(None),
+            port: VolatileCell::new(PortInit::Uninit(port)),
             _lock: AtomicBool::new(false),
             _marker: PhantomData,
+        }
+    }
+
+    // Query if the port is initialized
+    #[inline(always)]
+    pub fn is_initialized(&self) -> bool {
+        match self.port.load() {
+            PortInit::Init(_) => true,
+            _ => false,
         }
     }
 
@@ -330,11 +348,77 @@ impl PollingUart<'_> {
     // - the baud rate must be an integer
     // fraction of `BAUD_RATE` (115,200 baud)
     // - returns `Ok(())` on success
-    pub fn initialize(&self, port: UartPort, rate: Option<usize>) -> Result<(), InitError> {
+    pub fn initialize(&self, rate: Option<usize>) -> Result<(), InitError> {
+        // Obtain write lock
+        self.obtain_lock();
+
+        // Check if port is already initialized
+        // - DO NOT propagate error, as that would
+        // lead to the lock being "poisoned"
+        let ret = match self.port.load() {
+            PortInit::Uninit(port) => unsafe { self.__initialize(port, rate) },
+            PortInit::Init(_) => Ok(()),
+        };
+
+        // Release write lock
+        unsafe { self.release_lock(); }
+
+        ret
+    }
+
+    // Obtain exclusive lock
+    #[inline(always)]
+    fn obtain_lock(&self) {
+        loop {
+            match self
+                ._lock
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
+            {
+                Ok(true) => {
+                    break;
+                }
+                _ => {
+                    spin_loop();
+                }
+            }
+        }
+    }
+
+    // Release exclusive lock
+    // - the operation is safe in theory, but
+    // opening for race cond
+    #[inline(always)]
+    unsafe fn release_lock(&self) {
+        self._lock.store(false, Ordering::Release);
+    }
+
+    // // Initializes UART instance using
+    // provided UART port and optional
+    // baud rate
+    // - the baud rate must be an integer
+    // fraction of `BAUD_RATE` (115,200 baud)
+    // - returns `Ok(())` on success
+    // Initializes UART instance using
+    // provided UART port and optional
+    // baud rate
+    // - the baud rate must be an integer
+    // fraction of `BAUD_RATE` (115,200 baud)
+    // - returns `Ok(())` on success
+    // - must be invoked by `initialize`, as this
+    // does not obtain or release the write lock
+    unsafe fn __initialize(&self, port: UartPort, rate: Option<usize>) -> Result<(), InitError> {
         // Calculate rate divisor
         let divisor: u16 = match rate {
-            Some(0) => return Err(InitError::ZeroBaudRate),
-            Some(r) if BAUD_RATE % r != 0 => return Err(InitError::InvalidDivisor),
+            Some(0) => {
+                unsafe { self.release_lock(); }
+                return Err(InitError::ZeroBaudRate);
+            },
+
+            Some(r) if BAUD_RATE % r != 0 => {
+                unsafe { self.release_lock(); }
+                return Err(InitError::InvalidDivisor);
+            },
+
             Some(r) => (BAUD_RATE / r) as u16,
             None => 1,
         };
@@ -384,40 +468,18 @@ impl PollingUart<'_> {
         } else {
             // Set internal port
             // - `self.port` has interior mutability
-            self.port.store(Some(port));
+            self.port.store(PortInit::Init(port));
 
             Ok(())
         }
     }
-
-    // Obtain exclusive lock
-    #[inline(always)]
-    fn obtain_lock(&self) {
-        loop {
-            match self
-                ._lock
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
-            {
-                Ok(true) => {
-                    break;
-                }
-                _ => {
-                    spin_loop();
-                }
-            }
-        }
-    }
-
-    // Release exclusive lock
-    // - the operation is safe in theory, but
-    // opening for race cond
-    unsafe fn release_lock(&self) {
-        self._lock.store(false, Ordering::Release);
-    }
 }
 
+unsafe impl Sync for PollingUart<'_> {}
 impl !CharDevice<'_> for PollingUart<'_> {}
 impl<'a> LockableDevice<'a> for PollingUart<'a> {
+    // - should be enforced by constraints in
+    // `UartDevice`
     type GuardType = PollingUartGuard<'a>;
     type Error = InitError;
 
@@ -429,7 +491,7 @@ impl<'a> LockableDevice<'a> for PollingUart<'a> {
         self.obtain_lock();
 
         // Check if the instance has been correctly instantiated
-        if let Some(port) = self.port.load() {
+        if let PortInit::Init(port) = self.port.load() {
             Ok(PollingUartGuard {
                 port,
                 lock: &self._lock,
