@@ -10,9 +10,9 @@
 
 // Use internal definitions
 use crate::arch::x86::io::{in_b, out_b};
+use crate::shared::io::{CharDevice, LockableDevice};
 use crate::shared::io::uart::UartPort;
 use crate::shared::structs::VolatileCell;
-use crate::shared::traits::{Read, Write, CharDevice, LockableDevice};
 
 // Defintion uses
 use core::hint::spin_loop;
@@ -297,6 +297,7 @@ fn write_bytes(port: UartPort, buf: &[u8], wait: bool, consume: bool) -> Result<
 }
 
 // Initialization error types
+#[derive(Debug, Copy, Clone)]
 pub enum InitError {
     ZeroBaudRate,
     InvalidDivisor,
@@ -477,6 +478,7 @@ impl PollingUart<'_> {
 
 unsafe impl Sync for PollingUart<'_> {}
 impl !CharDevice<'_> for PollingUart<'_> {}
+
 impl<'a> LockableDevice<'a> for PollingUart<'a> {
     // - should be enforced by constraints in
     // `UartDevice`
@@ -516,30 +518,6 @@ pub struct PollingUartGuard<'a> {
     lock: &'a AtomicBool,
 }
 
-// - implement read operations
-// TODO: expand operations
-impl Read for PollingUartGuard<'_> {
-    type ReadError = ();
-
-    // Pull some bytes from serial input
-    fn read(&self, buf: &mut [u8]) -> Result<usize, ()> {
-        // Read with waiting and without filling
-        read_bytes(self.port, buf, true, false)
-    }
-}
-
-// - implement write operations
-// TODO: expand operations
-impl Write for PollingUartGuard<'_> {
-    type WriteError = ();
-
-    // Write some bytes to serial output
-    fn write(&self, buf: &[u8]) -> Result<usize, ()> {
-        // Write with waiting and without consuming
-        write_bytes(self.port, buf, true, false)
-    }
-}
-
 // - implement automatic lock release
 impl Drop for PollingUartGuard<'_> {
     fn drop(&mut self) {
@@ -548,5 +526,19 @@ impl Drop for PollingUartGuard<'_> {
 }
 
 // - mark type as a character device
-impl CharDevice<'_> for PollingUartGuard<'_> {}
+impl CharDevice<'_> for PollingUartGuard<'_> {
+    type ReadError = ();
+    type WriteError = ();
+
+    // Read some bytes from serial input
+    fn char_read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+        read_bytes(self.port, buf, true, false)
+    }
+
+    // Write some bytes to serial output
+    fn char_write(&mut self, buf: &[u8]) -> Result<usize, ()> {
+        write_bytes(self.port, buf, true, false)
+    }
+}
+
 impl !LockableDevice<'_> for PollingUartGuard<'_> {}

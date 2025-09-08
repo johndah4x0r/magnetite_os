@@ -6,7 +6,7 @@
     providers.
 */
 
-use crate::shared::traits::{CharDevice, LockableDevice};
+use super::{CharDevice, LockableDevice};
 use core::marker::Sync;
 
 /*
