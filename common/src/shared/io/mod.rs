@@ -6,7 +6,12 @@
     providers.
 */
 
+use core::include;
+
 // Expect the `io` submodule
 mod __arch_io {
     pub use crate::arch::__arch::io::*;
 }
+
+// Include traits
+include!("traits.rs");
