@@ -15,6 +15,7 @@ use crate::shared::io::uart::UartPort;
 use crate::shared::structs::VolatileCell;
 
 // Defintion uses
+use core::arch::asm;
 use core::hint::spin_loop;
 use core::ops::Drop;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -349,10 +350,14 @@ impl PollingUart<'_> {
     // - the baud rate must be an integer
     // fraction of `BAUD_RATE` (115,200 baud)
     // - returns `Ok(())` on success
+    #[inline(never)]
     pub fn initialize(&self, rate: Option<usize>) -> Result<(), InitError> {
+        unsafe { asm!("xchg bx, bx"); }
+
         // Obtain write lock
         self.obtain_lock();
 
+        unsafe { asm!("xchg cx, cx"); }
         // Check if port is already initialized
         // - DO NOT propagate error, as that would
         // lead to the lock being "poisoned"
@@ -370,15 +375,19 @@ impl PollingUart<'_> {
     // Obtain exclusive lock
     #[inline(always)]
     fn obtain_lock(&self) {
+        let new = true;
+        let mut old = false;
+
         loop {
             match self
                 ._lock
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
+                .compare_exchange(old, new, Ordering::SeqCst, Ordering::Acquire)
             {
-                Ok(true) => {
+                Ok(_) => {
                     break;
                 }
-                _ => {
+                Err(x) => {
+                    old = x;
                     spin_loop();
                 }
             }
@@ -407,6 +416,7 @@ impl PollingUart<'_> {
     // - returns `Ok(())` on success
     // - must be invoked by `initialize`, as this
     // does not obtain or release the write lock
+    #[inline(never)]
     unsafe fn __initialize(&self, port: UartPort, rate: Option<usize>) -> Result<(), InitError> {
         // Calculate rate divisor
         let divisor: u16 = match rate {
