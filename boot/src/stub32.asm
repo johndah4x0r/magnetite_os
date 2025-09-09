@@ -16,7 +16,6 @@
 
 ; Define external labels
 extern _stub64                      ; Wrapped 64-bit code label
-extern _stub64_offset               ; Offset to _start (defined by linker)
 
 ; Include 16-bit stub
 %include "boot/src/stub16.asm"

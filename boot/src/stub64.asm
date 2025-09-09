@@ -22,7 +22,7 @@ _stub64:
 .pad:
     times 12-($-$$) db 0
 .handover_offset:
-    dq main
+    dq main - _stub64
 .start:
     cli                 ; Kill interrupts
 

@@ -9,8 +9,6 @@ ENTRY(_stub16)                          /* make sure _stub32 exists */
 SECTIONS {
     . = 0xf000;                         /* hard-coded entry point in definitions file */
 
-    _stub64_offset = _stub64 - .;       /* offset to 64-bit entry */
-
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
         *(.stub16)
