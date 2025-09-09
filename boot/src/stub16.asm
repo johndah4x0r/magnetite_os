@@ -30,7 +30,7 @@ _stub16:
 .pad:
     times 12-($-$$) db 0
 .handover_offset:
-    dd _stub64_offset, 0                    ; (offset provided by 'stub32.asm')
+    dd _stub64 - _stub16, 0                 ; (offset provided by 'stub32.asm')
 .start:
     cli                                     ; FA - Kill interrupts
     xchg bx, bx                             ; 87 DB - Bochs breakpoint
