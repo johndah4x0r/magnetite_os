@@ -5,13 +5,17 @@
 ; as we're merely storing definitions here
 
 ; Low Memory is used as follows:
-; * 0x00500-0x07af0 - stack (to be relocated)
+; * 0x00500-0x00fff - Unused (1280 B)
+; * 0x01000-0x06fff - E820 memory map (24 kB)
+; * 0x07000-0x07af0 - stack (to be relocated)
 ; * 0x07b00-0x07bff - guard region (not enforced)
 ; * 0x07c00-0x07dff - boot record (512 B)
 ; * 0x07e00-0x08bff - read buffer (4 kB, accept overrun in initial stage)
-; * 0x09000-0x0eff8 - E820 memory map (24 kB)
-; * 0x0f000-0x10fff - Second stage loader (8 kB)
-; * 0x11000-0x1ffff - minimum usable memory (128 kB)
+; * 0x08e00-0x08fff - guard region (not enforced)
+; * 0x09000-0x0ffff - second-stage loader (up to 24 kB)
+; * 0x10000-0x10fff - guard region (not enforced)
+; * 0x11000-0x14fff - page tables
+; * 0x15000-0x1ffff - minimum usable memory (128 kB)
 ; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
 
 ; Definitions for 'boot/src/vbr.asm'
@@ -20,15 +24,15 @@ START_VECTOR                equ 0x7c00                      ; Start vector
 SIZEOF_MAGIC                equ 3                           ; Size of magic numbers
 OEM_LABEL                   equ START_VECTOR + SIZEOF_MAGIC ; Pointer to OEM label
 
-ADDR_S2_LDR                 equ 0xf000                      ; Pointer to second-stage loader
-ADDR_E820_MAP               equ 0x9000                      ; Pointer to E820 map
+ADDR_S2_LDR                 equ 0x9000                      ; Pointer to second-stage loader
+ADDR_E820_MAP               equ 0x1000                      ; Pointer to E820 map
 
 E820_ENTRIES                equ 1023                        ; E820 map entries
 
 SIZEOF_RDENTRY              equ 32                          ; Size of RDE
 SIZEOF_83NAME               equ 11                          ; Size of 8.3 name
 
-FRAME                       equ -18                         ; Start of generic frame
+FRAME                       equ -20                         ; Start of generic frame
 ROOT_DIR_SECTORS            equ FRAME + 0                   ; Offset for RDS count
 FIRST_FAT_SECTOR_LOW        equ FRAME + 2                   ; Offset for FAT LBA low word
 FIRST_FAT_SECTOR_HIGH       equ FRAME + 4                   ; Offset for FAT LBA high word
@@ -38,6 +42,7 @@ FIRST_DATA_SECTOR_LOW       equ FRAME + 10                  ; Offset for data LB
 FIRST_DATA_SECTOR_HIGH      equ FRAME + 12                  ; Offset for data LBA high word
 LAST_ACCESSED_LOW           equ FRAME + 14                  ; Offset for previous LBA low word
 LAST_ACCESSED_HIGH          equ FRAME + 16                  ; Offset for previous LBA high word
+BOOT_DEV                    equ FRAME + 18                  ; Boot device number
 
 DAP_FRAME                   equ FRAME - 16                  ; Start of DAP frame
 DAP_SIZE                    equ DAP_FRAME + 0               ; Offset for DAP size
@@ -72,10 +77,10 @@ PG_ENABLE           equ 1 << 31         ; Enable paging in CR0
 
 
 ; Page hierarchy layout
-PML4T_ADDR          equ 0x1000          ; Location of PML4 table (master hierarchy)
-PDPT_ADDR           equ 0x2000          ; Location of PDP table (huge)
-PDT_ADDR            equ 0x3000          ; Location of page directory table (large)
-PT_ADDR             equ 0x4000          ; Location of page table (standard)
+PML4T_ADDR          equ 0x11000         ; Location of PML4 table (master hierarchy)
+PDPT_ADDR           equ 0x12000         ; Location of PDP table (huge)
+PDT_ADDR            equ 0x13000         ; Location of page directory table (large)
+PT_ADDR             equ 0x14000         ; Location of page table (standard)
 
 
 ; Page masks and flags
