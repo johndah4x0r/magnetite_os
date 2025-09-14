@@ -52,13 +52,13 @@ $(BUILD_DIR)/boot.img: $(BUILD_DIR) $(BUILD_DIR)/vbr.bin $(BUILD_DIR)/boot1.bin
 	mcopy -i $@ $(BUILD_DIR)/boot1.bin ::/;
 	./scripts/patch_vbr.sh --no-backup $@
 
-$(BUILD_DIR)/vbr.bin: $(BOOT_SRC)/vbr.asm
+$(BUILD_DIR)/vbr.bin: $(BOOT_SRC)/vbr.asm $(BOOT_SRC)/defs.asm
 	nasm $(BOOT_SRC)/vbr.asm -f bin -o $(BUILD_DIR)/vbr.bin 
 
-$(BUILD_DIR)/stub32.o: $(BOOT_SRC)/stub16.asm $(BOOT_SRC)/stub32.asm
+$(BUILD_DIR)/stub32.o: $(BOOT_SRC)/stub16.asm $(BOOT_SRC)/stub32.asm $(BOOT_SRC)/defs.asm
 	nasm $(BOOT_SRC)/stub32.asm -f elf64 -o $(BUILD_DIR)/stub32.o
 
-$(BUILD_DIR)/stub64.o: $(BOOT_SRC)/stub64.asm
+$(BUILD_DIR)/stub64.o: $(BOOT_SRC)/stub64.asm $(BOOT_SRC)/defs.asm
 	nasm $(BOOT_SRC)/stub64.asm -f elf64 -o $(BUILD_DIR)/stub64.o 
 
 # Rust routines

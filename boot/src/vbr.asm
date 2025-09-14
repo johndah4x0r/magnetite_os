@@ -94,7 +94,7 @@ _start:
     sti                                     ; Enable interrupts
 
     ; Store device number
-    mov [bootdev], dl
+    mov [bp + BOOT_DEV], dl
 
 ; Check whether drive extensions
 ; are present
@@ -323,17 +323,19 @@ parse_entry:
     mov [bp + DAP_LBA_LOW], ax
     mov [bp + DAP_LBA_MID_1], dx
 
-    mov di, read_buf                        ; Point DI to read buffer
     mov cx, 1                               ; Read just 1 sector
 
-    mov [bp + DAP_BUF_OFFSET], di           ; Store value of DI in DAP
-    call read_bootdev                       ; Read from bootdrive
+    ; Point DAP offset to read buffer
+    mov word [bp + DAP_BUF_OFFSET], read_buf
+
+    ; Read from boot device
+    call read_bootdev
     ; --- AX and DX clobbered --- ;
 .read:
     mov ax, [read_buf + bx]                 ; Read cluster ID from calculated offset
     jmp .top                                ; Go back to top of loop
 .done:
-    mov al, [bootdev]
+    mov al, [bp + BOOT_DEV]
     push ADDR_S2_LDR                        ; Jump to second-stage loader
     ret                                     ; (here)
 
@@ -348,10 +350,11 @@ parse_entry:
 ; - dap.buf_offset: target buffer offset
 ; - dap.buf_segment: target buffer segment
 read_bootdev:
+    pusha
     mov word [bp + DAP_NUM_SECTORS], 1      ; Load just 1 sector per iteration
 .read:
     ; Read from disk
-    mov dl, [bootdev]                       ; Load boot drive number into LD
+    mov dl, [bp + BOOT_DEV]                 ; Load boot drive number into LD
     mov ah, 0x42                            ; Extended read
     lea si, [bp + DAP_FRAME]                ; Point SI to DAP (ES = 0)
 
@@ -380,6 +383,7 @@ read_bootdev:
     loop .read                              ; Read one more sector (decrement CX)
     ; --- fall-through --- ;
 .done:
+    popa
     ret
 
 ; Print error message to screen, then reset
@@ -408,9 +412,6 @@ errmsg              db "ERR", 0
 ; Target file name (8.3)
 ; - zero-terminated for good measure
 filename            db "BOOT1   BIN", 0
-
-; Variables
-bootdev:            db 0                    ; Boot drive number
 
 times 510-($-$$) db 0                       ; Pad the boot record
 dw 0xaa55                                   ; Boot signature
