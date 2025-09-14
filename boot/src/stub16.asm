@@ -52,19 +52,10 @@ _stub16:
     jmp 0:.vec
 .vec:
     cld                                     ; Clear DF
-    sti                                     ; Restore interrupts
     mov byte [bootdev], al                  ; Store boot drive number
 
-; Attach #UD to a custom handler
-attach_ud:
-    ; Load custom interrupt vector
-    ; - use `xchg` for external inspection
-    xor ax, ax                              ; Zero AX
-    lea si, [ud_handler]                    ; Point SI to custom handler
-    xchg [0x0018], si                       ; Load custom IP
-    xchg [0x001a], ax                       ; Load custom CS
-
 ; Check for CPU capability
+; - assumes IF = 0 for atomicity
 cpu_check:
     ; Perform legal checks
     ; (0) check for changes in high FLAGS
@@ -92,6 +83,15 @@ cpu_check:
     call panic
 
 .illegal:
+    ; Load custom interrupt vector
+    ; - only makes sense in CPUs newer
+    ; than the 8086
+    ; - use `xchg` for external inspection
+    xor ax, ax                              ; Zero AX
+    lea si, [ud_handler]                    ; Point SI to custom handler
+    xchg [0x0018], si                       ; Load custom IP
+    xchg [0x001a], ax                       ; Load custom CS
+
     ; Run a slew of illegal instructions to
     ; enforce minimum CPU capability
     ; - checks if `cpuid` works as intended,
@@ -118,18 +118,17 @@ cpu_check:
     push signature                          ; Vendor string
     push msgs.got_id                        ; Preamble
     call print
-
+.done:
+    sti                                     ; Restore interrupts
     ; TODO
-
-    jmp e820_scan
 
 ; Scan for memory using E820
 e820_scan:
     xchg bx, bx                             ; Breakpoint
-    push edi                                ; Save EDI
-.lma:
+
     ; Perform LMA check (wiki.osdev.org)
     clc                                     ; Clear carry flag
+    xor ax, ax                              ; Zero AX
     int 0x12                                ; Check LMA size using BIOS
     jc .stop                                ; Do not proceed if memory
                                             ; size cannot be assessed
@@ -137,12 +136,11 @@ e820_scan:
     cmp ax, 128                             ; Make sure we have at least 
                                             ; 128 kB of continuous memory
 
-    jge .cont                               ; Do not proceed if LMA is
-                                            ; smaller than 128 kB
+    jge .cont                               ; Proceed if true
     ; --- fall-through --- ;
 .stop:
-    mov si, msgs.e820
-    call panic
+    mov si, msgs.e820                       ; Point SI to reason message
+    call panic                              ; Call panic routine
 .cont:
     lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
     xor esi, esi                            ; Zero entry count
@@ -153,26 +151,27 @@ e820_scan:
                                             ; this many entries
     jge .end                                ; - skip if true
 
-    push edi                                ; Save EDI
+    mov dword [edi + 20], 1                 ; Force valid ACPI 3.x entry
+
     mov eax, 0xe820                         ; Set call number
-    mov edx, 0x534D4150                     ; String: 'SMAP'
+    mov edx, 0x534d4150                     ; String: 'SMAP' (big-endian)
     mov ecx, 24                             ; Ask for 24-byte entries
     int 0x15                                ; Call BIOS
-    jc .cleanup                             ; We're done already...
-    cmp eax, 0x534D4150                     ; String: 'SMAP'
-    jne .cleanup                            ; We're also done already...
+    jc .verify                              ; We're done already...
+    cmp eax, 0x534d4150                     ; String: 'SMAP' (big-endian)
+    jne .verify                             ; We're also done already...
 
-    pop edi                                 ; Restore EDI
     add edi, 24                             ; Move EDI to the next 24-byte slot
     inc esi                                 ; Increase entry count
     test ebx, ebx                           ; Test completion flag
     jnz .seek                               ; Continue if not complete
     ; --- fall-through --- ;
-.cleanup:
-    pop edi
+.verify:
+    test esi, esi                           ; Check if we're at the first invocation
+    jz .stop                                ; Panic if error occured on the first try
 .end:
     ; Store zero-extended base and entry count
-    ; - If entry counts were to exceed
+    ; - If entry count was to exceed
     ; 2**32 - 1 (which shouldn't happen),
     ; then something's already wrong, and
     ; missing other areas wouldn't be the
@@ -185,8 +184,6 @@ e820_scan:
     mov [ADDR_E820_MAP + 8], esi            ; Store entry count
     xor esi, esi
     mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
-
-    pop edi                                 ; Restore EDI
 
 ; ---- TODO ---- ;
 ; In future designs, memory layout scanning,
@@ -253,6 +250,7 @@ panic:
     ; --- fall-through --- ;
 
     ; Provoke a triple fault
+    ; - only works post-286
     lidt [0x7b00]
     int 0x00
 
@@ -286,7 +284,6 @@ not_supported:
 ; - takes BP (pre-push SP)
 ; - clobbers AX, CX, DX
 print:
-    sti                                     ; Enable interrupts
     pop dx                                  ; Pop return IP
     mov cx, bp                              ; Calculate entry count
     sub cx, sp                              ; (1)
@@ -298,7 +295,14 @@ print:
     lodsb                                   ; Read 1 byte from [DS:SI], then shift
     test al, al                             ; End of string (null-terminated)
     jz .done
+
+    ; This part is admittedly inefficient,
+    ; but it has to be if we don't want
+    ; to affect FLAGS set by the caller
+    pushf                                   ; Save FLAGS
+    sti                                     ; Enable interrupts
     int 0x10                                ; Call BIOS
+    popf                                    ; Restore FLAGS
     jmp .inner                              ; Resume loop
 .done:
     loop .cont                              ; Parse more entries
@@ -326,7 +330,7 @@ stringify_num:
     ; fun thing to deal with...
     push bx                                 ; Save BX
     shr bx, 12                              ; Capture highest nibble
-    lea si,  [numstr.chrset + bx]           ; Obtain character
+    lea si, [numstr.chrset + bx]            ; Obtain character
     pop bx                                  ; Restore BX
     movsb                                   ; Write to buffer (increment DI)
     shl bx, 4                               ; Discard highest nibble
