@@ -7,7 +7,7 @@
 ENTRY(_stub16)                          /* make sure _stub32 exists */
 
 SECTIONS {
-    . = 0xf000;                         /* hard-coded entry point in definitions file */
+    . = 0x9000;                         /* hard-coded entry point in definitions file */
 
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
