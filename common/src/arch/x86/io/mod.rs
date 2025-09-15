@@ -4,6 +4,7 @@
 
 // Export submodules
 pub mod uart;
+pub mod console;
 
 // Definition uses
 use core::arch::asm;
