@@ -91,44 +91,33 @@ pub unsafe fn out_d(port: u16, val: u32) {
     }
 }
 
-// Performs a non-overlapping copy between two
-// memory regions
+// Performs a non-overlapping copy between two memory regions
 // - length is explicitly provided
 // - caller must ensure that both arguments point
-// to valid memory (writing to read-only memory is UB,
-// reading from uninitialized memory is UB)
+//   to valid memory (writing to read-only memory is UB,
+//   reading from uninitialized memory is UB)
 // TODO: remove or simplify redundant operations
-#[inline(always)]
-pub unsafe fn __memcpy_checked(dest: *mut u8, src: *const u8, len: usize) -> *const u8 {
+pub unsafe extern "C" fn __memcpy_checked(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
     // Guard against redundancy
     if len == 0 {
-        return dest as *const u8;
+        return dest;
     }
 
     // Set up remaining bytes count
     let mut remaining = len;
 
-    // Find where the destination and source
-    // buffers are located in memory
-    let dest_start = dest as usize;
-    let src_start = src as usize;
-
     let mut dest_ptr = dest;
     let mut src_ptr = src;
 
-    // Find where the buffers end
-    let dest_end = dest_start + len;
-    let src_end =  src_start + len;
-
     // Make sure the regions don't trivially overlap
     assert!(
-        dest_start != src_start && dest_end != src_end,
+        dest.addr() != src.addr(), 
         "Destination and source regions trivially overlap"
     );
 
     // Find the leftmost and the rightmost regions
-    let right_start = dest_start.max(src_start);
-    let left_end = dest_end.min(src_end);
+    let right_start = dest.addr().max(src.addr());
+    let left_end = unsafe { dest.add(len).addr().min(src.add(len).addr()) };
 
     // Make sure the regions don't overlap at all
     // - make sure the condition
@@ -140,41 +129,119 @@ pub unsafe fn __memcpy_checked(dest: *mut u8, src: *const u8, len: usize) -> *co
         "Destination and source regions partly overlap"
     );
 
-    // Obtain alignment and aligned addresses for `usize`
+    // Obtain alignment for `usize`
     let align = mem::align_of::<usize>();
-    let dest_start_offset = align - dest_start % align;
-    let src_start_offset = align - src_start % align;
-    let dest_end_offset = dest_end % align;
-    let src_end_offset = src_end % align;
 
-    let aligned_dest_start = dest_start + dest_start_offset;
-    let aligned_src_start = src_start + src_start_offset;
-    let aligned_dest_end = dest_end - dest_end_offset;
-    let aligned_src_start = src_end - src_end_offset;
+    // - perform bytewise copy if the provided
+    // regions are sufficiently small
+    if len <= 2 * align {
+        return unsafe { __memcpy_bytewise(dest, src, len) };
+    }
 
-    // Do not proceed if the operands don't
-    // have the same alignment offset
+    // Calculate aligned addresses
+    let dest_start_offset = align - dest.align_offset(align);
+    let src_start_offset = align - src.align_offset(align);
+    let dest_end_offset = unsafe { dest.add(len).align_offset(align) };
+    let src_end_offset = unsafe { src.add(len).align_offset(align) };
+
+    // Do not proceed if the operands don't have
+    // the same alignment offset
     assert!(
         dest_start_offset == src_start_offset && dest_end_offset == src_end_offset,
         "Destination and source alignment offsets do not match"
     );
 
     // Perform byte-wise copy of unaligned bytes
-    let n = remaining.min(align - dest_start_offset);
-
-    for i in 0..n {
-        unsafe { *dest_ptr.add(i) = *src_ptr.add(i); }
-    }
-
+    let n = remaining.min(dest_start_offset);
+    let _ = unsafe { __memcpy_bytewise(dest, src, n) };
     remaining -= n;
 
+    // - stop if no bytes are remaining
     if remaining == 0 {
-        return dest as *const u8;
+        return dest;
     }
 
-    // Calculate number of blocks to copy
+    unsafe {
+        // Increment pointers
+        dest_ptr = dest_ptr.add(n);
+        src_ptr = src_ptr.add(n);
+
+        // At this point, `dest_ptr` and `src_ptr` should
+        // be aligned, allowing us to use `__memcpy`
+        let _ = __memcpy(dest_ptr, src_ptr, remaining);
+    }
 
     // By convention, we should return an
     // immutable pointer to the destination
-    dest as *const u8
+    dest
+}
+
+// Perform bytewise non-overlapping copy
+#[inline(always)]
+pub unsafe extern "C" fn __memcpy_bytewise(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
+    for i in 0..len {
+        unsafe { *dest.add(i) = *src.add(i); }
+    }
+
+    dest
+}
+
+// Performs a copy between non-overlapping memory regions
+// - performs word-sized copies whenever possible,
+//   completing the rest of the copy using
+//   byte-wise copying
+// - assumes aligned pointers at the input
+// - inlined whenever possible to reduce call
+//   overhead (may not apply to external
+//   callers)
+// - length is explicitly provided
+// - caller must ensure that both arguments point
+//   to valid memory (writing to read-only memory is UB,
+//   reading from uninitialized memory is UB)
+// TODO: implement vectorized copying
+#[inline(always)]
+pub unsafe extern "C" fn __memcpy(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
+    // Guard against redundancy
+    if len == 0 {
+        return dest;
+    }
+
+    // Copy destination and source pointers
+    let mut dest_ptr_word = dest as *mut usize;
+    let mut src_ptr_word = src as *const usize;
+
+    // Obtain alignment for `usize`
+    // - serves as a pessimistic proxy for its
+    // size in memory
+    let align = mem::align_of::<usize>();
+
+    // Calculate word-sized blocks and remainder
+    let num_word = len / align;
+    let num_byte = len % align;
+
+    // Copy word-sized blocks
+    for _ in 0..num_word {
+        unsafe {
+            *dest_ptr_word = *src_ptr_word;
+
+            // - shift destination and source
+            // pointers by one word size
+            dest_ptr_word = dest_ptr_word.add(1);
+            src_ptr_word = src_ptr_word.add(1);
+        }
+    }
+
+    // Re-cast the pointers and copy remaining bytes
+    let _ = unsafe { 
+        __memcpy_bytewise(
+            dest_ptr_word as *mut u8,
+            src_ptr_word as *const u8,
+            num_byte
+        )
+    };
+
+    // By convention, `memcpy` either returns a
+    // pointer to a "suitable created object",
+    // or a pointer to the destination buffer
+    dest
 }
