@@ -112,11 +112,23 @@ impl<'a> CharDevice<'a> for ConsoleOutputGuard<'a> {
     type WriteError = ();
 
     // Read bytes from the return buffer
-    // - just copy from the return buffer
-    // to the provided buffer
+    // - this operation should never fail - though
+    // rigorous checks might be implemented in the
+    // future
     fn char_read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
-        // Calculate 
+        // Calculate smallest length
+        let n = self.ret_buf.len().min(buf.len());
+
+        // Iterate over indices and copy from the
+        // return buffer to the provided buffer
+        for i in 0..n {
+            buf[i] = self.ret_buf[i];
+        }
+
+        Ok(n)
     }
+    
+    fn char_write(&mut self, _: &[u8]) -> Result<usize, <Self as CharDevice<'a>>::WriteError> { todo!() }
 }
 
 impl Drop for ConsoleOutputGuard<'_> {

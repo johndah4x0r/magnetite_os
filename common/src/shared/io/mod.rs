@@ -20,3 +20,6 @@ pub mod uart;
 
 // Include traits
 include!("traits.rs");
+
+// Include methods
+include!("methods.rs");
