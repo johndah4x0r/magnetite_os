@@ -91,13 +91,48 @@ pub unsafe fn out_d(port: u16, val: u32) {
     }
 }
 
+// Determines whether two equally sized buffers overlap
+#[inline(always)]
+fn is_overlapping(dest: *const u8, src: *const u8, len: usize) -> bool {
+    // Obtain destination and source addresses
+    let dest_addr = dest.addr();
+    let src_addr = src.addr();
+
+    let dest_end = dest_addr + len;
+    let src_end = src_addr + len;
+
+    // Find the leftmost and the rightmost regions
+    let right_start = dest_addr.max(src_addr);
+    let left_end = dest_end.min(src_end);
+
+    dest_addr == src_addr || right_start <= left_end
+}
+
+// Determines whether two equally sized buffers have
+// the same alignment offset
+#[inline(always)]
+fn is_align_offset_eq(dest: *const u8, src: *const u8, len: usize) -> bool {
+    // Obtain alignment for `usize`
+    let align = mem::align_of::<usize>();
+
+    // Calculate aligned addresses
+    let dest_start_offset = align - dest.align_offset(align);
+    let src_start_offset = align - src.align_offset(align);
+    let dest_end_offset = unsafe { dest.add(len).align_offset(align) };
+    let src_end_offset = unsafe { src.add(len).align_offset(align) };
+
+    dest_start_offset == src_start_offset && dest_end_offset == src_end_offset
+}
+
 // Performs a non-overlapping copy between two memory regions
 // - length is explicitly provided
-// - caller must ensure that both arguments point
-//   to valid memory (writing to read-only memory is UB,
+// - caller must ensure that both arguments point to
+//   valid memory (writing to read-only memory is UB,
 //   reading from uninitialized memory is UB)
+// - alignment and non-overlap are strongly recommended,
+//   though the method won't fail (instead leading to UB)
 // TODO: remove or simplify redundant operations
-pub unsafe extern "C" fn __memcpy_checked(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
+pub unsafe fn __memcpy(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
     // Guard against redundancy
     if len == 0 {
         return dest;
@@ -109,51 +144,23 @@ pub unsafe extern "C" fn __memcpy_checked(dest: *mut u8, src: *const u8, len: us
     let mut dest_ptr = dest;
     let mut src_ptr = src;
 
-    // Make sure the regions don't trivially overlap
-    assert!(
-        dest.addr() != src.addr(), 
-        "Destination and source regions trivially overlap"
-    );
-
-    // Find the leftmost and the rightmost regions
-    let right_start = dest.addr().max(src.addr());
-    let left_end = unsafe { dest.add(len).addr().min(src.add(len).addr()) };
-
-    // Make sure the regions don't overlap at all
-    // - make sure the condition
-    // `left_start <= right_start <= left_end <= right_end`
-    // is never satisfied (we only need to account
-    // for the middle condition)
-    assert!(
-        right_start > left_end,
-        "Destination and source regions partly overlap"
-    );
-
     // Obtain alignment for `usize`
     let align = mem::align_of::<usize>();
 
-    // - perform bytewise copy if the provided
-    // regions are sufficiently small
-    if len <= 2 * align {
-        return unsafe { __memcpy_bytewise(dest, src, len) };
+    // Perform bytewise copy if
+    // 1. the provided regions are sufficiently small, or
+    // 2. either regions overlap, or
+    // 3. alignment offsets don't match
+    if is_overlapping(dest, src, len) || len <= 2 * align || !is_align_offset_eq(dest, src, len) {
+        return unsafe { copy_bytes(dest, src, len) }
     }
 
-    // Calculate aligned addresses
-    let dest_start_offset = align - dest.align_offset(align);
-    let src_start_offset = align - src.align_offset(align);
-    let dest_end_offset = unsafe { dest.add(len).align_offset(align) };
-    let src_end_offset = unsafe { src.add(len).align_offset(align) };
-
-    // Do not proceed if the operands don't have
-    // the same alignment offset
-    assert!(
-        dest_start_offset == src_start_offset && dest_end_offset == src_end_offset,
-        "Destination and source alignment offsets do not match"
-    );
+    // Calculate prefix size
+    let size_prefix = align - dest.align_offset(align);
 
     // Perform byte-wise copy of unaligned bytes
-    let n = remaining.min(dest_start_offset);
-    let _ = unsafe { __memcpy_bytewise(dest, src, n) };
+    let n = remaining.min(size_prefix);
+    let _ = unsafe { copy_bytes(dest, src, n) };
     remaining -= n;
 
     // - stop if no bytes are remaining
@@ -168,7 +175,7 @@ pub unsafe extern "C" fn __memcpy_checked(dest: *mut u8, src: *const u8, len: us
 
         // At this point, `dest_ptr` and `src_ptr` should
         // be aligned, allowing us to use `__memcpy`
-        let _ = __memcpy(dest_ptr, src_ptr, remaining);
+        let _ = __memcpy_unchecked(dest_ptr, src_ptr, remaining);
     }
 
     // By convention, we should return an
@@ -176,11 +183,83 @@ pub unsafe extern "C" fn __memcpy_checked(dest: *mut u8, src: *const u8, len: us
     dest
 }
 
-// Perform bytewise non-overlapping copy
+// Performs byte-wise non-overlapping copy
+// - uses R-registers
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub unsafe extern "C" fn __memcpy_bytewise(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
-    for i in 0..len {
-        unsafe { *dest.add(i) = *src.add(i); }
+unsafe fn copy_bytes(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
+    // - DF must be cleared for `movs`
+    // to work in left-to-right mode
+    unsafe {
+        asm!(
+            "cld",
+            "rep movsb",
+            in("rcx") len,
+            in("rsi") src,
+            in("rdi") dest,
+        );
+    }
+
+    dest
+}
+
+// Performs byte-wise non-overlapping copy
+// - uses E-registers
+#[cfg(target_arch = "x86")]
+#[inline(always)]
+unsafe fn copy_bytes(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
+    // - DF must be cleared for `movs`
+    // to work in left-to-right mode
+    unsafe {
+        asm!(
+            "cld",
+            "rep movsb",
+            in("ecx") len,
+            in("esi") src,
+            in("edi") dest,
+        );
+    }
+
+    dest
+}
+
+// Performs word-wise non-overlapping copy
+// - uses R-registers
+// - aligned access recommended
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn copy_words(dest: *mut usize, src: *const usize, len: usize) -> *mut usize {
+    // - DF must be cleared for `movs`
+    // to work in left-to-right mode
+    unsafe {
+        asm!(
+            "cld",
+            "rep movsq",
+            in("rcx") len,
+            in("rsi") src,
+            in("rdi") dest,
+        );
+    }
+
+    dest
+}
+
+// Performs word-wise non-overlapping copy
+// - uses E-registers
+// - aligned access recommended
+#[cfg(target_arch = "x86")]
+#[inline(always)]
+unsafe fn copy_words(dest: *mut usize, src: *const usize, len: usize) -> *mut usize {
+    // - DF must be cleared for `movs`
+    // to work in left-to-right mode
+    unsafe {
+        asm!(
+            "cld",
+            "rep movsd",
+            in("ecx") len,
+            in("esi") src,
+            in("edi") dest,
+        );
     }
 
     dest
@@ -198,48 +277,48 @@ pub unsafe extern "C" fn __memcpy_bytewise(dest: *mut u8, src: *const u8, len: u
 // - caller must ensure that both arguments point
 //   to valid memory (writing to read-only memory is UB,
 //   reading from uninitialized memory is UB)
+// - must be invisible to the compiler, as `memcpy` is
+//   intended to be exposed elsewhere
 // TODO: implement vectorized copying
 #[inline(always)]
-pub unsafe extern "C" fn __memcpy(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
+pub unsafe fn __memcpy_unchecked(dest: *mut u8, src: *const u8, len: usize) -> *mut u8 {
     // Guard against redundancy
     if len == 0 {
         return dest;
     }
 
     // Copy destination and source pointers
-    let mut dest_ptr_word = dest as *mut usize;
-    let mut src_ptr_word = src as *const usize;
+    // - endianness might play a role here, though
+    // we are simply copying without performing
+    // intermediate operations, so byte order
+    // shouldn't be affected at all
 
-    // Obtain alignment for `usize`
-    // - serves as a pessimistic proxy for its
-    // size in memory
-    let align = mem::align_of::<usize>();
+    // Obtain size of `usize`
+    let size_word = mem::size_of::<usize>();
 
     // Calculate word-sized blocks and remainder
-    let num_word = len / align;
-    let num_byte = len % align;
+    let num_word = len / size_word;
+    let num_byte = len % size_word;
 
     // Copy word-sized blocks
-    for _ in 0..num_word {
-        unsafe {
-            *dest_ptr_word = *src_ptr_word;
-
-            // - shift destination and source
-            // pointers by one word size
-            dest_ptr_word = dest_ptr_word.add(1);
-            src_ptr_word = src_ptr_word.add(1);
-        }
+    if num_word != 0 {
+        let _ = unsafe { 
+            copy_words(dest as *mut usize, src as *const usize, num_word)
+        };
     }
+    
 
     // Re-cast the pointers and copy remaining bytes
-    let _ = unsafe { 
-        __memcpy_bytewise(
-            dest_ptr_word as *mut u8,
-            src_ptr_word as *const u8,
-            num_byte
-        )
-    };
-
+    if num_byte != 0 {
+        let _ = unsafe { 
+            copy_bytes(
+                dest.add(num_word * size_word),
+                src.add(num_word * size_word),
+                num_byte,
+            )
+        };
+    }
+    
     // By convention, `memcpy` either returns a
     // pointer to a "suitable created object",
     // or a pointer to the destination buffer
