@@ -14,6 +14,7 @@ use crate::shared::structs::VolatileCell;
 use core::cell::UnsafeCell;
 use core::hint::spin_loop;
 use core::ops::Drop;
+use core::ptr;
 use core::slice::from_raw_parts_mut;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::marker::{Sync, PhantomData};
@@ -107,6 +108,27 @@ pub struct ConsoleOutputGuard<'a> {
     _lock: &'a AtomicBool,
 }
 
+impl ConsoleOutputGuard<'_> {
+    // Shift screen upwards by this many lines
+    // - will cap at `max_y - 1` if `n >= max_y - 1`
+    fn shift_up(&mut self, n: usize) {
+        // Cap shift count
+        let m = if n >= self.max_y - 1 {
+            self.max_y - 1
+        } else {
+            n
+        };
+
+        // Read all but the `m` last lines
+        let count = self.max_y - m;
+
+        for i in 0..count {
+            // Well, damn...
+            todo!();
+        }
+    }
+}
+
 impl<'a> CharDevice<'a> for ConsoleOutputGuard<'a> {
     type ReadError = ();
     type WriteError = ();
@@ -115,7 +137,39 @@ impl<'a> CharDevice<'a> for ConsoleOutputGuard<'a> {
     // - just copy from the return buffer
     // to the provided buffer
     fn char_read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
-        // Calculate 
+        // Obtain the length of the shortest buffer
+        let size = buf.len().min(self.ret_buf.len());
+
+        // Copy only if the length is non-zero
+        if size > 0 {
+            // - use idiomatic copy
+            buf[..size].copy_from_slice(&self.ret_buf[..size]);
+        }
+
+        Ok(size)
+    }
+
+    // Write bytes to screen buffer
+    // - for now, write the bytes like a typewriter
+    fn char_write(&mut self, buf: &[u8]) -> Result<usize, ()> {
+        // Iterate over the characters
+        for &c in &buf[..] {
+            // Construct a valid VGA character (black-on-white, static)
+            // TODO: let attributes be dynamically assignable
+            let attrs: u16 = 0x00_0F;
+            let chr: u16 = (attrs << 8) | (c as u16);
+
+            // Calculate linear index
+            let index = *self.cur_x + (*self.cur_y * self.max_x);
+
+            // Write character to text memory
+            self.buf[index].store(chr);
+
+            // Move write head
+            todo!();
+        }
+
+        Ok(buf.len())
     }
 }
 
