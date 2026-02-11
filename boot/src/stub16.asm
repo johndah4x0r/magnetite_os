@@ -81,7 +81,6 @@ cpu_check:
 
     mov si, msgs.unsup
     call panic
-
 .illegal:
     ; Load custom interrupt vector
     ; - only makes sense in CPUs newer
@@ -185,24 +184,29 @@ e820_scan:
     xor esi, esi
     mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
 
-; ---- TODO ---- ;
-; In future designs, memory layout scanning,
-; initialization and 32-bit mode operation
-; may be contained in a separate file loaded
-; from a FAT16 volume.
-; --- [TODO] --- ;
-
 ; Enable A20 gate - fast
 fast_a20:
-    xchg bx, bx
+    xor cx, cx                              ; Zero CX (in case it gets consumed)
+    mov dl, 0xff                            ; Only allow 255 iterations (do NOT use CX)
+.fast_a20_top:
+    xchg bx, bx                             ; Breakpoint
     in al, 0x92                             ; Read from port 0x92
     test al, 2                              ; Check if A20 is already enabled
-    jnz .fast_a20_after
+    jnz .fast_a20_after                     ; Exit verification loop
+    ; --- fall-through --- ;
+
     or al, 2                                ; Set A20 bit
     and al, 0xfe                            ; Clear fast reset bit
     out 0x92, al                            ; Write to port 0x92
-    pause                                   ; Pause (or 'rep nop' in older CPUs)
-    jmp fast_a20                            ; Verify that the A20 get is set
+    pause                                   ; Pause (or 'rep nop' in older CPUs; may consume CX)
+    
+    dec dl                                  ; Decrement DL
+    test dl, dl                             ; Check if DL > 0
+    jnz .fast_a20_top                       ; Verify that the A20 gate is set
+    ; --- fall-through on exhaustion --- ;
+
+    mov si, msgs.unsup                      ; Print error message (unsupported CPU)
+    call panic                              ; Terminate gracefully
 .fast_a20_after:
     xchg bx, bx                             ; Breakpoint in Bochs 
 
@@ -286,8 +290,8 @@ not_supported:
 print:
     pop dx                                  ; Pop return IP
     mov cx, bp                              ; Calculate entry count
-    sub cx, sp                              ; (1)
-    shr cx, 1                               ; (2)
+    sub cx, sp                              ; (1) calculate difference in bytes
+    shr cx, 1                               ; (2) divide by two to obtain count
     mov ah, 0x0e                            ; BIOS teletype function
 .cont:
     pop si                                  ; Pop entry

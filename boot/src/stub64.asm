@@ -69,7 +69,7 @@ _stub64:
     ; - NEVER perform a far call, as there's
     ; no need to change segments, and we'd
     ; otherwise run the risk of feeding RIP 
-    ; with blatantly ncorrect values
+    ; with blatantly incorrect values
     call main
     ; --- fall-through (unlikely) --- ;
 
