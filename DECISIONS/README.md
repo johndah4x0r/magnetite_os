@@ -1,5 +1,5 @@
 # magnetite_os/DECISIONS
-Here's were my indecision become evident...
+Here's where my indecision is recorded for eternity...
 
 (interactive - up one level: [`magnetite_os/`](../))
 
