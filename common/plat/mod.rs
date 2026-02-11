@@ -6,7 +6,6 @@
     and must be guarded off whenever possible.
 */
 
-// Definitions specific to the IA-32 and x86-64
-// ISAs (known collectively as x86)
+// Definitions specific to the PC platform
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub mod x86;
+pub mod pc_bios;

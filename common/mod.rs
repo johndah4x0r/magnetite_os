@@ -6,8 +6,11 @@
     and must be guarded off whenever possible.
 */
 
-// Platform-agnostic definitions
-pub mod shared;
+// ISA-specific definitions
+pub mod arch;
 
 // Platform-specific definitions
-pub mod arch;
+pub mod plat;
+
+// Platform-agnostic definitions
+pub mod shared;
