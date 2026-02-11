@@ -11,9 +11,11 @@
 #![feature(negative_impls)]
 #![feature(associated_type_defaults)]
 
-// Platform-agnostic definitions
-pub mod shared;
+// ISA-specific definitions
+pub mod arch;
 
 // Platform-specific definitions
-// - will expose auto-selected `_this`
-pub mod arch;
+pub mod plat;
+
+// Platform-agnostic definitions
+pub mod shared;
