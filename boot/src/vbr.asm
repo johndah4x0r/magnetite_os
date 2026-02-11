@@ -132,7 +132,7 @@ compute_sectors:
     add ax, cx                              ; Add into AX to over-count
     adc dx, 0                               ; Propagate carry
 
-    div bx                                  ; Divide AX by sector size
+    div bx                                  ; Divide DX:AX by sector size
     mov [bp + ROOT_DIR_SECTORS], ax         ; Store quotient and ignore remainder
 
     ; Calculate first FAT sector
@@ -252,7 +252,8 @@ parse_entry:
     ; Step 2
     ; Copy current cluster to target
     xor dx, dx                              ; Zero DX
-    movzx cx, byte [SectorsPerCluster]      ; Store cluster size in CX
+    xor cx, cx
+    mov cl, byte [SectorsPerCluster]        ; Store cluster size in CX
     sub ax, 2                               ; Subtract from cluster ID
     mul cx                                  ; Multiply by cluster size
     
@@ -369,8 +370,9 @@ read_bootdev:
     ; - dirty trick
     mov ax, [BytesPerSector]                ; Load sector size
     add [bp + DAP_BUF_OFFSET], ax           ; Add it to buffer offset
+    xor dx, dx                              ; Zero DX
     adc dx, 0                               ; Propagate carry
-    shr dx, 15                              ; Make it MSB
+    shl dx, 12                              ; Turn it into a proper segment
     add [bp + DAP_BUF_SEGMENT], dx          ; Add it to buffer segment
     jc panic                                ; Give up on overflow
 
