@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 BOOT_SRC := boot/src
-COMMON_SRC := common/src
+COMMON_SRC := common/
 KERN_SRC := kern/src
 
 TARGET_TRIPLET := x86_64-unknown-none
@@ -19,7 +19,7 @@ KERN_RS_GLOB := kern-*.o
 BOOT64_LDFLAGS := -m elf_x86_64 -T link_boot64.ld -r --gc-sections
 BOOT1_LDFLAGS := -m elf_x86_64 -T link_boot1.ld --oformat=binary
 
-BOOT_RS_CARGOFLAGS := --release -Z build-std=core,compiler_builtins
+BOOT_RS_CARGOFLAGS := --release -Zbuild-std=core,compiler_builtins -Zjson-target-spec
 BOOT_RS_RUSTCFLAGS := -C panic=abort
 
 all: $(BUILD_DIR) $(BUILD_DIR)/vbr.bin $(BUILD_DIR)/boot1.bin
