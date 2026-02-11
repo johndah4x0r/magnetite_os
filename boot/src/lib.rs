@@ -9,7 +9,7 @@ use common::shared::structs::ArrayLike;
 use core::panic::PanicInfo;
 
 // - x86-specific structures
-use common::arch::x86::structs::{BiosPB, LongE820};
+use common::plat::pc_bios::structs::{BiosPB, LongE820};
 
 // Initial routine
 //  - call it 'main' for the sake of brevity
