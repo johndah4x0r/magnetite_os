@@ -1,4 +1,4 @@
-## Organization & build flow
+# Organization & build flow
 This project is currently divided into two sub-projects (interactive - links are clickable):
 - [`magnetite_os/boot`](boot/) - **(WIP)** custom legacy bootloader written 
     in assembler and Rust 
@@ -6,7 +6,7 @@ This project is currently divided into two sub-projects (interactive - links are
 - [`magnetite_os/common`](common/) - **(WIP)** common definitions
 - [`magnetite_os/DECISIONS`](DECISIONS/) - decisions record
 
-## Toolchain requirements
+# Toolchain requirements
 This project primarily uses 
 - `make` to keep track of progress, resolve dependencies,
 and orchestrate component builds,
@@ -17,22 +17,22 @@ and orchestrate component builds,
 FAT16 disk images containing system files, and
 - `bochs` to run the project in a virtual machine
 
-## Testing
+# Testing
 To build and debug the bootloader, simply run
 ```bash
 make debug_boot
 ```
 
-## Rationale
+# Rationale
 TODO
 
-## Key concepts & terminology
+# Key concepts & terminology
 Specific concepts and terminology are more appropriately explained
 in their respective contexts: 
 - boot-related breakdown in `magnetite_os/boot/README.md`, and
 - kernel-related breakdown in `magnetite_os/kern/README.md`
 
-## Resources
+# Resources
 This project, like many other hobby OS development projects, would be
 next to impossible without reading into relevant literature.
 
