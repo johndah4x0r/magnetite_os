@@ -5,7 +5,7 @@
 
 // Wrapper type that assumes internal mutability,
 // and exposes volatile memory operations
-use crate::common::shared::structs::VolatileCell;
+use crate::shared::structs::VolatileCell;
 
 // Standard library imports
 use core::slice::from_raw_parts;

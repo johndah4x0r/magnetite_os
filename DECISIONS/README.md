@@ -10,6 +10,7 @@ Past decisions with no exact date of introduction can be found
 here: [`RETROSPECT.md`](./RETROSPECT.md)
 
 ## Decisions made so far:
+- [2026-02-12](./DECISION_2026-02-12.md)
 - [2025-11-29](./DECISION_2025-11-29.md)
 - [2025-09-01, part 1](./DECISION_2025-09-01_1.md)
 - [2025-08-30, part 2](./DECISION_2025-08-30_2.md)

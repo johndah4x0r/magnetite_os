@@ -5,6 +5,7 @@
 extern crate common;
 
 // Definition uses
+extern crate common;
 use core::panic::PanicInfo;
 
 // Initial routine
