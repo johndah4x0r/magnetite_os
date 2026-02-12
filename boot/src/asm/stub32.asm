@@ -12,13 +12,13 @@
 ; Refer to 'boot/src/defs.asm' for memory layout
 
 ; Include definitions
-%include "boot/src/defs.asm"
+%include "boot/src/asm/defs.asm"
 
 ; Define external labels
 extern _stub64                      ; Wrapped 64-bit code label
 
 ; Include 16-bit stub
-%include "boot/src/stub16.asm"
+%include "boot/src/asm/stub16.asm"
 
 ; Do not use absolute positioning, as the
 ; binaries will be linked at a later stage

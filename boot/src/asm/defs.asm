@@ -18,8 +18,8 @@
 ; * 0x15000-0x1ffff - minimum usable memory (128 kB)
 ; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
 
-; Definitions for 'boot/src/vbr.asm'
-; and 'boot/src/stub16.asm'
+; Definitions for 'boot/src/asm/vbr.asm'
+; and 'boot/src/asm/stub16.asm'
 START_VECTOR                equ 0x7c00                      ; Start vector
 SIZEOF_MAGIC                equ 3                           ; Size of magic numbers
 OEM_LABEL                   equ START_VECTOR + SIZEOF_MAGIC ; Pointer to OEM label

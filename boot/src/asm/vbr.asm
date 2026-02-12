@@ -16,7 +16,7 @@
 ; TODO: if possible, add concrete error messages
 
 ; Include definitions
-%include "boot/src/defs.asm"
+%include "boot/src/asm/defs.asm"
 
 [bits 16]
 [org 0x7c00]
