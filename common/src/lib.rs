@@ -1,4 +1,4 @@
-/*
+/*!
     A collection of shared resources at the source level
 
     As per decision 2025-08-30, part 2, platform-specific

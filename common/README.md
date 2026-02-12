@@ -11,6 +11,13 @@ This Rust module is currently divided into three categories:
 - `plat` - Platform-specific definitions
 - `shared` - Platform-agnostic definitions
 
+## Documentation
+The documentation for the crate `common` can be generated and viewed by running
+```bash
+cargo doc --open
+```
+inside the directory `common/` (which should be **this** directory).
+
 ## Rationale
 Although it is entirely possible to move on with the project by simply 
 placing definitions where they need to be, it would be nice to:

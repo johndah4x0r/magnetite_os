@@ -1,5 +1,5 @@
-/*
-    Architecture-specific definitions
+/*!
+    Platform-specific definitions
 
     As per decision 2025-08-30, part 2, platform-specific
     definitions must be separated from shared defintions,

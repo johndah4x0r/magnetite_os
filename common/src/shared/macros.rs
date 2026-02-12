@@ -1,14 +1,9 @@
 /*
-    A module containing platform-agnostic macros
-
-    The macros here are mostly auto-generated.
-    Expect therefore unseen inconsistencies.
+    Platform-agnostic macros
 */
 
-/*
-    A macro that aids in defining externally linkable
-    functions and statics using a relatively simple
-    Rust-like syntax
+/**
+    Assists defining externally linkable statics and functions
 */
 #[macro_export]
 macro_rules! relocate {
