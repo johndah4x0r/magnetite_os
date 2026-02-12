@@ -1,16 +1,20 @@
-/*
-    Definitions that are shared by bootloader and
-    kernel code, and are platform-agnostic by design.
+/*!
+    Platform-agnostic definitions
+
+    The definitions here are shared by bootloader and
+    kernel code, and should be platform-agnostic by design.
 
     As per decision 2025-08-30, part 2, platform-specific
     definitions must be separated from shared defintions,
     and must be guarded off whenever possible.
 */
 
-// Platform-agnostic macros
-pub mod macros;
+use core::include;
 
-// General structures
+// Platform-agnostic macros (include it)
+include!("macros.rs");
+
+// Generic structures
 pub mod structs;
 
 // Contract traits

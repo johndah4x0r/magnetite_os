@@ -1,4 +1,4 @@
-/*
+/*!
     Architecture-specific definitions
 
     As per decision 2025-08-30, part 2, platform-specific

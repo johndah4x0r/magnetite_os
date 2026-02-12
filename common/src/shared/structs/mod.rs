@@ -1,5 +1,5 @@
-/*
-    General platform-agnostic structures
+/*!
+    Generic platform-agnostic structures
 
     The structures defined in the submodules are either fully
     or partially binary-compatible with the contained types

@@ -1,3 +1,3 @@
-/*
-    Structures specific to the x86 family
+/*!
+    x86-specific structures
 */
