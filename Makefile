@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 BOOT_SRC := boot/src
-COMMON_SRC := common/
+COMMON_SRC := common/src
 KERN_SRC := kern/src
 
 TARGET_TRIPLET := x86_64-unknown-none
@@ -10,6 +10,7 @@ TARGET_SPEC := target_specs/$(TARGET_TRIPLET).json
 
 BOOT_RS_MANIFEST := boot/Cargo.toml
 KERN_RS_MANIFEST := kern/Cargo.toml
+COMMON_RS_MANIFEST := common/Cargo.toml
 
 BOOT_RS_DIR := boot/target/$(TARGET_TRIPLET)/release
 
@@ -28,6 +29,7 @@ clean:
 	rm -r $(BUILD_DIR) || true
 	cargo clean --manifest-path $(BOOT_RS_MANIFEST)
 	cargo clean --manifest-path $(KERN_RS_MANIFEST)
+	cargo clean --manifest-path $(COMMON_RS_MANIFEST)
 	rm -f .patch_vbr*.log
 
 bootimg: $(BUILD_DIR)/boot.img

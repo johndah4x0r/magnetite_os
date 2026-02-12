@@ -1,10 +1,8 @@
 #![no_std]
 #![no_main]
 
-// Shared resources module
-extern crate common;
-
 // Definition uses
+extern crate common;
 use common::shared::structs::ArrayLike;
 use core::panic::PanicInfo;
 
