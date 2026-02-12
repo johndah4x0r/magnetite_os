@@ -1,10 +1,10 @@
-/*
+/*!
     Structures specific to the x86, such as the
     BIOS parameter block and E820 memory layout
     entries
 */
 
-// Short (20 B) E820 entry
+/// Short (20 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
 #[repr(C, packed)]
 pub struct ShortE820 {
@@ -13,7 +13,7 @@ pub struct ShortE820 {
     pub area_type: u32,
 }
 
-// Long (24 B) E820 entry
+/// Long (24 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
 #[repr(C, packed)]
 pub struct LongE820 {
@@ -23,7 +23,7 @@ pub struct LongE820 {
     pub acpi_attr: u32,
 }
 
-// BIOS parameter block structure
+/// BIOS parameter block structure
 // - if it should ever become necessary
 #[repr(C, packed)]
 pub struct BiosPB {

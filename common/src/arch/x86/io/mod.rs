@@ -1,11 +1,11 @@
-/*
+/*!
     x86-specific I/O defintions
 */
 
 // Definition uses
 use core::arch::asm;
 
-// Read byte from provided port
+/// Read byte from provided port
 #[inline(always)]
 pub unsafe fn in_b(port: u16) -> u8 {
     let val: u8;
@@ -20,7 +20,7 @@ pub unsafe fn in_b(port: u16) -> u8 {
     val
 }
 
-// Read word from provided port
+/// Read word from provided port
 #[inline(always)]
 pub unsafe fn in_w(port: u16) -> u16 {
     let val: u16;
@@ -35,7 +35,7 @@ pub unsafe fn in_w(port: u16) -> u16 {
     val
 }
 
-// Read double word from provided port
+/// Read double word from provided port
 #[inline(always)]
 pub unsafe fn in_d(port: u16) -> u32 {
     let val: u32;
@@ -50,7 +50,7 @@ pub unsafe fn in_d(port: u16) -> u32 {
     val
 }
 
-// Write provided byte to provided port
+/// Write provided byte to provided port
 #[inline(always)]
 pub unsafe fn out_b(port: u16, val: u8) {
     unsafe {
@@ -62,7 +62,7 @@ pub unsafe fn out_b(port: u16, val: u8) {
     }
 }
 
-// Write provided word to provided port
+/// Write provided word to provided port
 #[inline(always)]
 pub unsafe fn out_w(port: u16, val: u16) {
     unsafe {
@@ -74,7 +74,7 @@ pub unsafe fn out_w(port: u16, val: u16) {
     }
 }
 
-// Write provided double word to provided port
+/// Write provided double word to provided port
 #[inline(always)]
 pub unsafe fn out_d(port: u16, val: u32) {
     unsafe {

@@ -3,7 +3,7 @@
 
 // Definition uses
 extern crate common;
-use common::shared::structs::ArrayLike;
+use common::shared::structs::array_like::ArrayLike;
 use core::panic::PanicInfo;
 
 // - BIOS-specific structures

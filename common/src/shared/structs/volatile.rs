@@ -1,5 +1,5 @@
-/*
-    An include file defining the volatile cell wrapper type
+/*!
+    Module defining a wrapper type for volatile memory operations
 */
 
 use core::cell::UnsafeCell;
@@ -7,12 +7,13 @@ use core::ptr;
 use core::sync::atomic;
 use core::sync::atomic::Ordering;
 
-/** Memory-compatible volatile cell
+/**
+    Memory layout-compatible volatile cell
 
-    This type can be used to guarantee inner mutability
-    and volatile access for in-situ statics (through
-    the write-only handle), though it cannot fully guarantee
-    thread safety or mutability for aliased memory.
+    This type can be used to guarantee volatile access
+    patterns to memory and interior mutability for statics
+    (though it cannot single-handedly guarantee thread
+    safety or mutability for aliased memory).
 */
 #[repr(C)]
 pub struct VolatileCell<T>(UnsafeCell<T>);
@@ -20,9 +21,7 @@ pub struct VolatileCell<T>(UnsafeCell<T>);
 impl<T: Copy> VolatileCell<T> {
     /// Create new instance of `VolatileCell`
     pub const fn new(val: T) -> Self {
-        VolatileCell(
-            UnsafeCell::new(val)
-        )
+        VolatileCell(UnsafeCell::new(val))
     }
 
     /// Perform volatile read

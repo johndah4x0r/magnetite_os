@@ -1,4 +1,4 @@
-/*
+/*!
     Definitions specific to the PC BIOS platform
 */
 
