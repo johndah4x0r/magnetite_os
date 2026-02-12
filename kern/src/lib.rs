@@ -1,9 +1,6 @@
 #![no_std]
 #![no_main]
 
-// Shared resources module
-extern crate common;
-
 // Definition uses
 extern crate common;
 use core::panic::PanicInfo;

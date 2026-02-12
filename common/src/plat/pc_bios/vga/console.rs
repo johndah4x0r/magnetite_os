@@ -1,11 +1,10 @@
-/*
-    An include file defining a wrapper type for
-    the VGA text console (0xb8000)
+/*!
+    Module defining a wrapper type for the VGA text console
 */
 
 // Wrapper type that assumes internal mutability,
 // and exposes volatile memory operations
-use crate::shared::structs::VolatileCell;
+use crate::shared::structs::volatile::VolatileCell;
 
 // Standard library imports
 use core::slice::from_raw_parts;

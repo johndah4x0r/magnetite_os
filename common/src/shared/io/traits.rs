@@ -6,11 +6,9 @@
     These traits define the contract for specific
     I/O operations, which implementors must comply
     with.
-
-    TODO: expand where appropriate
 */
 
-// Trait to mark type as readable
+/// Trait to mark type as readable
 pub trait Read<'a> {
     /*
         Required implementations:
@@ -25,7 +23,7 @@ pub trait Read<'a> {
     // TODO
 }
 
-// Trait to mark type as writeable
+/// Trait to mark type as writeable
 pub trait Write<'a> {
     /*
         Required implementations:

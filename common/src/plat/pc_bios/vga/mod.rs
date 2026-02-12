@@ -1,4 +1,4 @@
-/*
+/*!
     Definitions specific to VGA operation on the PC platform
 */
 

@@ -1,4 +1,4 @@
-/*
+/*!
     Platform-agnostic exposure of I/O operations
 
     This module defines the contract between

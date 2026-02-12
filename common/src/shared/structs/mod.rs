@@ -6,11 +6,11 @@
     (if they contain anything at all).
 */
 
-// Use `include!` macro
-use core::include;
-
 // Volatile wrapper type
-include!("volatile.rs");
+pub mod volatile;
 
 // Array-like fat pointer type
-include!("array_like.rs");
+pub mod array_like;
+
+// Spin lock wrapper type
+pub mod spin_lock;

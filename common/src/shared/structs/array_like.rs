@@ -1,11 +1,6 @@
-/*
-    Definitions for an FFI-compatible "fat pointer"
+/*!
+    Module defining FFI-compatible "fat pointers"
     to an array-like region in memory
-
-    (only item-level comments are allowed, as this file
-    is included as-is, rather than admitted as a module)
-
-    TODO: finish writing documentation
 */
 
 // Definition uses

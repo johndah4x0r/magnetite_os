@@ -20,5 +20,5 @@ pub mod structs;
 // Contract traits
 pub mod traits;
 
-// I/O operations
+// Sanitized I/O definitions
 pub mod io;
