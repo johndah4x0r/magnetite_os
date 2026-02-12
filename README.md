@@ -6,20 +6,22 @@ This project is currently divided into two sub-projects (interactive - links are
 - [`magnetite_os/common`](common/) - **(WIP)** common definitions
 - [`magnetite_os/DECISIONS`](DECISIONS/) - decisions record
 
-## Testing
-TODO
+## Toolchain requirements
+This project primarily uses 
+- `make` to keep track of progress, resolve dependencies,
+and orchestrate component builds,
+- `cargo` (from the Rust `nightly` toolchain) to compile Rust sources
+- `nasm` to compile x86 assembly sources,
+- `ld` (from `binutils`) to link binaries with custom layouts, 
+- `mkfs.fat` and `mcopy` (from `dosfstools` and `mtools`) to generate
+FAT16 disk images containing system files, and
+- `bochs` to run the project in a virtual machine
 
+## Testing
 To build and debug the bootloader, simply run
 ```bash
 make debug_boot
 ```
-
-This project primarily uses `make` to keep track of progress,
-resolve dependencies and orchestrate component builds.
-
-Since this project uses Rust and x86 assembly, it would 
-be prudent to install `nasm`, GNU `binutils` and the 
-Rust toolchain.
 
 ## Rationale
 TODO
