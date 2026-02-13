@@ -26,11 +26,67 @@
     TODO: finish doc-comments and reword, so that we aren't using
     the exact same wording as the Rust standard library (though
     this is mostly a legal detail, and not a functional one)
-
-    TODO: fix `ReadError` and `ẀriteError` (which are vestigial) into
-    something similar to `std::io::Error`, as we shouldn't let every
-    R/W type define their own error types.
 */
+
+/*
+    Error kinds that faithfully emulates `std::io::ErrorKind`
+    to the extent permitted by `no_std`.
+
+    This may be expanded as internal use grows.
+*/
+#[non_exhaustive]
+pub enum ErrorKind {
+    NotFound,
+    PermissionDenied,
+    InvalidInput,
+    InvalidData,
+    TimedOut,
+    WriteZero,
+    ResourceBusy,
+    Interrupted,
+    Unsupported,
+    UnexpectedEof,
+    OutOfMemory,
+    InProgress,
+    Other,
+    Uncategorized,
+}
+
+/*
+    A fixed set of error payload types
+
+    This is pretty much the only legal way we can have
+    "dynamic typing" in a `no_std` environment.
+*/
+#[non_exhaustive]
+pub enum ErrorPayload {
+    Code(usize),
+    Message(&'static str),
+    Other,
+    Empty,
+}
+
+/*
+    Structure that represents an error, and faithfully emulates
+    `std::io::Error` to the extent permitted by `no_std`.
+
+    As we can't assume that dynamic typing will be available,
+    we're gonna have to be creative...
+*/
+pub struct Error {
+    e_kind: ErrorKind,
+    e_payload: ErrorPayload,
+}
+
+impl Error {
+    // Create an error with provided kind and payload
+    pub const fn new(kind: ErrorKind, payload: ErrorPayload) -> Self {
+        Error {
+            e_kind: kind,
+            e_payload: payload,
+        }
+    }
+}
 
 /**
     Trait to mark type as readable
@@ -39,14 +95,6 @@
     one required method [`read`](Read::read)
 */
 pub trait Read {
-    /*
-        Required implementations:
-        - Read error type
-        - Read function
-    */
-    /// A fixed read error type for this particular reader
-    type ReadError;
-
     /**
         Pull some bytes from this source into the specified
         buffer, returning how many bytes were read.
@@ -83,7 +131,7 @@ pub trait Read {
         are used to access the read bytes. Callers have to ensure that no unchecked
         out-of-bounds accesses are possible even if `n > buf.len()`.
     */
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::ReadError>;
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error>;
 
     /* Given implementations */
 
@@ -99,7 +147,7 @@ pub trait Read {
         necessary to completely fill the buffer.
     */
     // FIXME: find a mathematically better and safer alternative
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Self::ReadError> {
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
         // Get buffer length
         let l: usize = buf.len();
         let mut rem = l;
@@ -111,6 +159,11 @@ pub trait Read {
             // Obtain number of bytes actually read
             // - propagate error syntactically
             let n = self.read(&mut buf[l - rem..l])?;
+
+            if n == 0 {
+                // TODO: make this more verbose and robust
+                return Err(Error::new(ErrorKind::UnexpectedEof, ErrorPayload::Empty));
+            }
 
             // Perform zero-clamped subtraction
             rem -= n.min(rem);
@@ -124,13 +177,6 @@ pub trait Read {
 
 /// Trait to mark type as writeable
 pub trait Write {
-    /*
-        Required implementations:
-        - Write error type
-        - Write function
-    */
-    type WriteError;
-
     /**
         Writes the provided buffer into this writer,
         returning how many bytes were written.
@@ -149,7 +195,7 @@ pub trait Write {
         be written to this writer.
 
     */
-    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::WriteError>;
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Error>;
 
     /**
         Flushes this output stream, ensuring that all intermediately
@@ -159,13 +205,13 @@ pub trait Write {
         It is considered an error if not all bytes could be written
         due to I/O errors or EOF being reached.
     */
-    fn flush(&mut self) -> Result<(), Self::WriteError>;
+    fn flush(&mut self) -> Result<(), Error>;
 
     /* Given implementations */
 
     // Write string literal into the writer
     #[inline(always)]
-    fn write_str(&mut self, literal: &str) -> Result<usize, Self::WriteError> {
+    fn write_str(&mut self, literal: &str) -> Result<usize, Error> {
         self.write(literal.as_bytes())
     }
 }
