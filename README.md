@@ -24,7 +24,11 @@ make debug_boot
 ```
 
 # Rationale
-TODO
+This project explores how, and whether, the essential components of an operating
+system can be developed on top of a pure **assembler + Rust** development stack
+(as opposed to the traditional **assembler + C/C++** stack).
+
+In short, this project is for educational and self-growth purposes.
 
 # Key concepts & terminology
 Specific concepts and terminology are more appropriately explained
@@ -38,3 +42,12 @@ next to impossible without reading into relevant literature.
 
 A good place to look up basics and details would be 
 the [OSDev wiki page](https://wiki.osdev.org).
+
+# Licensing
+This project is licensed under [the MIT license](https://opensource.org/license/MIT).
+A [copy](/LICENSE) can be found in the project root folder.
+
+# Acknowledgements
+This project uses portions derived from the Rust standard library,
+originally licensed under the MIT license.
+

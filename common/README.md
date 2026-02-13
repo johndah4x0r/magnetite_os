@@ -25,3 +25,7 @@ placing definitions where they need to be, it would be nice to:
 - have a single known location for the definitions
 - be able to share the definitions wherever possible, and
 - distinguish between target-agnostic and target-specific definitions
+
+## Acknowledgements
+This sub-project uses portions derived from the Rust standard library,
+originally licensed under [the MIT license](https://opensource.org/license/MIT).
