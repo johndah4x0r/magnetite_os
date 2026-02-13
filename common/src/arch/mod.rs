@@ -7,13 +7,14 @@
     must still be present at the source level).
 */
 
-// Define macro for exposing platform-specific submodules
+// Define macro for exposing ISA-specific submodules
 macro_rules! arch_mod {
     ($cfg:meta, $real_mod:ident) => {
         #[$cfg]
         pub mod $real_mod;
 
         #[$cfg]
+        // Catch-all exposure of ISA-specific definitions
         pub(crate) mod __arch {
             pub use super::$real_mod::*;
         }
@@ -23,3 +24,9 @@ macro_rules! arch_mod {
 // Definitions specific to the IA-32 and x86-64
 // platforms (known collectively as x86)
 arch_mod!(cfg(any(target_arch = "x86", target_arch = "x86_64")), x86);
+
+// Catch-all exposure of ISA-specific I/O definitions
+// - enforces presence of `__arch::io`
+pub(crate) mod __io {
+    pub use super::__arch::io::*;
+}
