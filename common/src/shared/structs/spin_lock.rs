@@ -15,25 +15,19 @@ use core::sync::atomic::{AtomicBool, Ordering};
     This lock type implicitly admits interior mutability,
     which is safe to expose due to mutual exclusion.
 
-    It is also FFI-compatible, provided that the enclosed
-    type `T` is also FFI-compatible. If used across FFI,
-    it is the responsibility of the outside user to guarantee
-    atomicity and discipline access to the protected data.
-
     This lock should only be used *if and when* there are no
     other options, as it has the potential to be unfair, and
     the lock-acquiring process burns processor cycles.
 */
-#[repr(C)]
-pub struct SpinLock<T> {
+pub struct Mutex<T> {
     data: UnsafeCell<T>,
     locked: AtomicBool,
 }
 
-impl<T> SpinLock<T> {
-    /// Create new instance of `SpinLock`
+impl<T> Mutex<T> {
+    /// Create new instance of `Mutex`
     pub const fn new(val: T) -> Self {
-        SpinLock {
+        Mutex {
             data: UnsafeCell::new(val),
             locked: AtomicBool::new(false),
         }
@@ -57,26 +51,37 @@ impl<T> SpinLock<T> {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
     }
 
-    /// Obtain lock handle, wait if necessary
-    pub fn lock(&self) -> SpinLockGuard<'_, T> {
+    /**
+        Obtains lock handle, waiting if necessary
+
+        # Safety
+        If a thread calls `lock` twice, then that thread **will deadlock**,
+        and it will retain exclusive access to the protected resource
+        **indefinitely** unless
+        - the lock is forcibly released, or
+        - the thread is properly terminated
+    */
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         // Acquire lock by brute force
         while self.cas_weak().is_err() {
             spin_loop();
         }
 
         // Return lock handle
-        SpinLockGuard {
+        MutexGuard {
             data_ptr: self.data.get(),
             locked_ref: &self.locked,
         }
     }
 
-    /// Attempt to obtain lock handle, returning
-    /// immediately if the lock is currently held
-    pub fn try_lock(&self) -> Result<SpinLockGuard<'_, T>, ()> {
+    /**
+        Attempts to obtain lock handle, returning
+        immediately if the lock is currently held
+    */
+    pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, ()> {
         // Kindly acquire the lock
         if self.cas_strong().is_ok() {
-            Ok(SpinLockGuard {
+            Ok(MutexGuard {
                 data_ptr: self.data.get(),
                 locked_ref: &self.locked,
             })
@@ -92,7 +97,7 @@ impl<T> SpinLock<T> {
 }
 
 // - allow reference sharing
-unsafe impl<T: Send> Sync for SpinLock<T> {}
+unsafe impl<T: Send> Sync for Mutex<T> {}
 
 /**
     Transparent lock handle with automatic lock release
@@ -100,12 +105,12 @@ unsafe impl<T: Send> Sync for SpinLock<T> {}
     The lock that issued the handle will be released as
     soon as the handle is dropped.
 */
-pub struct SpinLockGuard<'a, T> {
+pub struct MutexGuard<'a, T> {
     data_ptr: *mut T,
     locked_ref: &'a AtomicBool,
 }
 
-impl<T> Deref for SpinLockGuard<'_, T> {
+impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -114,14 +119,14 @@ impl<T> Deref for SpinLockGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for SpinLockGuard<'_, T> {
+impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: We know where `self.data` points to...
         unsafe { &mut *self.data_ptr }
     }
 }
 
-impl<T> Drop for SpinLockGuard<'_, T> {
+impl<T> Drop for MutexGuard<'_, T> {
     fn drop(&mut self) {
         self.locked_ref.store(false, Ordering::Release);
     }
