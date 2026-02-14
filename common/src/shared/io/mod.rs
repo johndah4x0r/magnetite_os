@@ -61,6 +61,7 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
     };
 
     // - generate error signal as expected by this function
+    // TODO: fix semantics
     match fmt::write(&mut adapter, args) {
         Ok(()) => Ok(()),
         Err(..) => {
@@ -68,9 +69,12 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
             if adapter.error.is_err() {
                 adapter.error
             } else {
-                // - how did `fmt::write` panic, even though
-                // `self.write_all` did not?
-                panic!("formatter returned an error while the underlying stream did not");
+                // - unlike `std`, we're actually gonna return
+                // something, rather than panicking outright
+                Err(Error {
+                    e_kind: ErrorKind::Uncategorized,
+                    e_payload: ErrorPayload::Empty,
+                })
             }
         }
     }
@@ -102,19 +106,53 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
 */
 #[non_exhaustive]
 pub enum ErrorKind {
+    /* Error kinds that require a working OS */
+    /// Resource not found
     NotFound,
+
+    /// Insufficient privileges for the requested action
     PermissionDenied,
-    InvalidInput,
-    InvalidData,
-    TimedOut,
-    WriteZero,
+
+    /// Resource busy
     ResourceBusy,
-    Interrupted,
-    Unsupported,
+
+    /* Conceptual errors */
+    /// Invalid input parameters
+    InvalidInput,
+
+    /// Invalid data encountered
+    InvalidData,
+
+    /// Unexpected end-of-file
     UnexpectedEof,
-    OutOfMemory,
+
+    /// Action interrupted
+    ///
+    /// Use only if retrying is idempotent and safe
+    Interrupted,
+
+    /// Action is expected to block
+    WouldBlock,
+
+    /// Action currently in progress
     InProgress,
+
+    /// Action timed out
+    TimedOut,
+
+    /// Insufficient memory for requested action
+    OutOfMemory,
+
+    /// Unsupported requested action
+    Unsupported,
+
+    /// Zero bytes written
+    WriteZero,
+
+    /// Other error
     Other,
+
+    /// Uncategorized error
     Uncategorized,
 }
 
