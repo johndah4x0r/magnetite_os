@@ -4,6 +4,34 @@
 
 /**
     Assists defining externally linkable statics and functions
+
+    *This is mostly a vestigial feature, though it might see an increase
+    in internal use in the far future.*
+
+    # Example use
+    A potential application for `relocate!` is relocating statics
+    and constants to a specific section in an executable or linkable
+    library:
+    ```rust
+        relocate! {
+            pub static EMPTY_BUF: [u8; 1024] = [0u8; 1024];
+                => ".bss";
+        }
+    ```
+
+    A more common use-case is relocating function ("vectors")
+    to a defined location in an executable:
+    ```rust
+        relocate! {
+            pub fn in_b(port: u8) -> u8 {
+                ...
+            } => ".hal";
+
+            pub fn out_b(port: u8, val: u8) {
+                ...
+            } => ".hal";
+        }
+    ```
 */
 #[macro_export]
 macro_rules! relocate {

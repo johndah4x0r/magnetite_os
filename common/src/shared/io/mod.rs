@@ -253,9 +253,19 @@ pub trait Read {
 }
 
 /**
-    Trait to mark type as writeable
+    Trait to mark type as writeable. Not to be confused with [`core::fmt::Write`].
 
-    This should not be confused with `core::fmt::Write`.
+    Implementors of the `Write` trait are sometimes called "writers".
+
+    Writers are defined by two required methods: [`write`] and [`flush`](Write::flush):
+    - The `write` method will attempt to write some data into the
+    object, returning how many bytes were successfully written.
+    - The `flush` method is useful for adapters and explicit buffers
+    themselves for ensuring that all buffered data has been pushed
+    out to the "true sink".
+
+    [`core::fmt::Write`]: core::fmt::Write
+    [`write`]: Write::write
 */
 pub trait Write {
     /**
