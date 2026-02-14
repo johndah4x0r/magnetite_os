@@ -12,7 +12,7 @@ use core::mem;
     "Fat pointer" to an immutable array-like structure
 
     The datatype `ArrayLike` serves as an FFI-safe substitute for the primitive
-    `&[T]`, as the ABI for `&[T]` is not stable, and is therefore not FFI-safe.
+    [`&[T]`](slice), as the ABI for `&[T]` is not stable, and is therefore not FFI-safe.
 
     # Example use
     A potential application for `ArrayLike` is bare-metal argument passing:
@@ -27,7 +27,9 @@ use core::mem;
     ```
     Here, the caller of `main` initializes a structure identical to `ArrayLike` in
     layout (also known as a "descriptor"), then passes an FFI-safe pointer to the
-    "descriptor" via the parameter `e820_map`. As `ArrayLike` has a known size at
+    "descriptor" via the parameter `e820_map`.
+
+    As `ArrayLike` has a known size at
     compile time, the reference `&ArrayLike<'_, T>` is structurally identical to
     the thin pointer `*const ArrayLike<'_, T>`.
 
@@ -72,7 +74,7 @@ impl<'a, T> TryFrom<&'a ArrayLike<'a, T>> for &'a [T] {
     "Fat pointer" to a mutable array-like structure
 
     The datatype `ArrayLikeMut` serves as an FFI-safe substitute for the primitive
-    `&mut [T]`, as the ABI for `&mut [T]` is not stable, and is therefore not FFI-safe.
+    [`&mut [T]`](slice), as the ABI for `&mut [T]` is not stable, and is therefore not FFI-safe.
 
     # Example use
     A potential application for `ArrayLikeMut` is passing pointers to mutable buffers:
@@ -87,7 +89,9 @@ impl<'a, T> TryFrom<&'a ArrayLike<'a, T>> for &'a [T] {
     ```
     Here, the caller of `main` initializes a structure identical to `ArrayLikeMut` in
     layout (also known as a "descriptor"), then passes an FFI-safe pointer to the
-    "descriptor" via the parameter `page_table`. As `ArrayLikeMut` has a known size at
+    "descriptor" via the parameter `page_table`.
+
+    As `ArrayLikeMut` has a known size at
     compile time, the reference `&ArrayLikeMut<'_, T>` is structurally identical to
     the thin pointer `*const ArrayLikeMut<'_, T>`.
 
