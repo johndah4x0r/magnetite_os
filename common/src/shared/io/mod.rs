@@ -147,6 +147,9 @@ pub enum ErrorKind {
     /// Zero bytes written
     WriteZero,
 
+    /// Resource uninitialized
+    Uninitialized,
+
     /// Other error
     Other,
 
@@ -266,6 +269,7 @@ impl Error {
         E_OUT_OF_MEMORY => OutOfMemory,
         E_UNSUPPORTED => Unsupported,
         E_WRITE_ZERO => WriteZero,
+        E_UNINITIALIZED => Uninitialized,
         E_OTHER => Other,
         E_UNCATEGORIZED => Uncategorized,
     }
