@@ -71,10 +71,7 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
             } else {
                 // - unlike `std`, we're actually gonna return
                 // something, rather than panicking outright
-                Err(Error {
-                    e_kind: ErrorKind::Uncategorized,
-                    e_payload: ErrorPayload::Empty,
-                })
+                Err(Error::E_UNCATEGORIZED)
             }
         }
     }
@@ -104,6 +101,7 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
 
     This may be expanded as internal use grows.
 */
+#[derive(Copy, Clone)]
 #[non_exhaustive]
 pub enum ErrorKind {
     /* Error kinds that require a working OS */
@@ -162,6 +160,7 @@ pub enum ErrorKind {
     This is pretty much the only legal way we can have
     "dynamic typing" in a `no_std` environment.
 */
+#[derive(Copy, Clone)]
 #[non_exhaustive]
 pub enum ErrorPayload {
     Code(usize),
@@ -182,13 +181,92 @@ pub struct Error {
     e_payload: ErrorPayload,
 }
 
+// macro to rapidly define zero-payload errors
+// syntax: `$e_name => $e_kind,`
+macro_rules! error_define {
+    ($e_name:ident => $e_kind:ident, $($rest:tt)*) => {
+        pub const $e_name: Error = Error {
+            e_kind: ErrorKind::$e_kind,
+            e_payload: ErrorPayload::Empty,
+        };
+
+        error_define! { $($rest)* }
+    };
+
+    ($e_name:ident => $e_kind:ident) => {
+        pub const $e_name: Error = Error {
+            e_kind: ErrorKind::$e_kind,
+            e_payload: ErrorPayload::Empty,
+        };
+    };
+
+    () => {}
+}
+
+// macro to rapidly instantiate `Err(Error)`
+// syntax:
+// - `error!(ErrorKind)`
+// - `error!(other ErrorKind)`
+// - `error!(ErrorKind, ErrorPayload, literal)`
+macro_rules! error {
+    ($e_kind:ident) => {
+        Err(Error {
+            e_kind: ErrorKind::$e_kind,
+            e_payload: ErrorPayload::Empty,
+        })
+    };
+
+    (other $e_kind:ident) => {
+        Err(Error {
+            e_kind: ErrorKind::$e_kind,
+            e_payload: ErrorPayload::Other,
+        })
+    };
+
+    ($e_kind:ident, $p_type:ident, $p_content:expr) => {
+        Err(Error {
+            e_kind: ErrorKind::$e_kind,
+            e_payload: ErrorPayload::$p_type($p_content),
+        })
+    };
+}
+
 impl Error {
-    // Create an error with provided kind and payload
+    /// Create an `Error` with provided kind and payload
     pub const fn new(kind: ErrorKind, payload: ErrorPayload) -> Self {
         Error {
             e_kind: kind,
             e_payload: payload,
         }
+    }
+
+    /// Return error kind
+    pub fn kind(&self) -> ErrorKind {
+        self.e_kind
+    }
+
+    /// Return error payload
+    pub fn payload(&self) -> ErrorPayload {
+        self.e_payload
+    }
+
+    /* Zero-payload error types */
+    error_define! {
+        E_NOT_FOUND => NotFound,
+        E_PERMISSION_DENIED => PermissionDenied,
+        E_RESOURCE_BUSY => ResourceBusy,
+        E_INVALID_INPUT => InvalidInput,
+        E_INVALID_DATA => InvalidData,
+        E_UNEXPECTED_EOF => UnexpectedEof,
+        E_INTERRUPTED => Interrupted,
+        E_WOULD_BLOCK => WouldBlock,
+        E_IN_PROGRESS => InProgress,
+        E_TIMED_OUT => TimedOut,
+        E_OUT_OF_MEMORY => OutOfMemory,
+        E_UNSUPPORTED => Unsupported,
+        E_WRITE_ZERO => WriteZero,
+        E_OTHER => Other,
+        E_UNCATEGORIZED => Uncategorized,
     }
 }
 
@@ -265,10 +343,7 @@ pub trait Read {
             match self.read(&mut buf) {
                 Ok(0) => {
                     // - unexpected EOF
-                    return Err(Error::new(
-                        ErrorKind::UnexpectedEof,
-                        ErrorPayload::Message("failed to fill the whole buffer"),
-                    ));
+                    return error!(UnexpectedEof, Message, "failed to fill the whole buffer");
                 }
                 Ok(m) => {
                     // - clamp `m`
@@ -350,10 +425,7 @@ pub trait Write {
             match self.write(&buf) {
                 Ok(0) => {
                     // - unexpected EOF
-                    return Err(Error::new(
-                        ErrorKind::WriteZero,
-                        ErrorPayload::Message("failed to consume the whole buffer"),
-                    ));
+                    return error!(WriteZero, Message, "failed to consume the whole buffer");
                 }
                 Ok(m) => {
                     // - clamp `m`
