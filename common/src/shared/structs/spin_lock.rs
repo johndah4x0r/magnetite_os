@@ -52,7 +52,7 @@ impl<T> Mutex<T> {
     }
 
     /**
-        Obtains lock handle, waiting if necessary
+        Obtains lock handle, blocking if necessary
 
         # Safety
         If a thread calls `lock` twice, then that thread **will deadlock**,
@@ -75,8 +75,7 @@ impl<T> Mutex<T> {
     }
 
     /**
-        Attempts to obtain lock handle, returning
-        immediately if the lock is currently held
+        Attempts to obtain lock handle once without blocking
     */
     pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, ()> {
         // Kindly acquire the lock
@@ -90,9 +89,33 @@ impl<T> Mutex<T> {
         }
     }
 
+    /** Attempts to obtain lock handle several times,
+        returning as soon as the lock is obtained
+    */
+    pub fn try_lock_repeat(&self, n: usize) -> Result<MutexGuard<'_, T>, ()> {
+        // - run a comparator-style setup
+        let mut m: usize = 0;
+        let mut g: Result<MutexGuard<'_, T>, ()> = Err(());
+
+        // - make the loop break if `g = Ok(..)` or `m >= n`.
+        while g.is_err() && (m < n) {
+            g = self.try_lock();
+            m += 1;
+        }
+
+        // - return guard, if any
+        g
+    }
+
     /// Forcibly release the lock
     pub unsafe fn unlock(&self) {
         self.locked.store(false, Ordering::Release);
+    }
+
+    /// Forcibly acquire a mutable
+    /// reference to the protected data
+    pub unsafe fn get_mut(&self) -> &mut T {
+        unsafe { &mut *(self.data.get()) }
     }
 }
 
