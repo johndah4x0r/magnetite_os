@@ -189,14 +189,12 @@ walk_root_dir:
 
     ; Read more entries on exhaustion
     ; - also performed on the first iteration
-    mov bx, read_buf                        ; Reset buffer pointer
-    mov [bp + DAP_BUF_OFFSET], bx           ; Store it in DAP (DS = ES = 0)
+    ; - point DAP to `0x0000:read_buf`
+    mov bx, read_buf
+    mov word [bp + DAP_BUF_OFFSET], bx
     mov cx, 2                               ; Read just two sectors
-    pusha                                   ; Save all GPRs
     call read_bootdev                       ; Read from boot drive
                                             ; (increments LBA by 2)
-    ; --- AX and DX clobbered --- ;
-    popa                                    ; Restore all GPRs
 
     ; Calculate entries per sector to
     ; mark the buffer as replenished
@@ -239,8 +237,14 @@ parse_entry:
     ; Load cluster ID 0
     mov ax, [bx + RDE_FIRST_CLUSTER]        ; Load low word, as the high word
                                             ; is always zero in FAT12/FAT16
-    mov di, ADDR_S2_LDR                     ; Point DI to target memory
+    ; Point DAP to target memory
+    ; - assume zero segment
+    mov word [bp + DAP_BUF_OFFSET], ADDR_S2_LDR
 .top:
+    ; Here, we'll assume that `dap.buf_offset`
+    ; and `dap.buf_segment` were properly
+    ; preserved
+
     ; Step 1: check current cluster ID
     ; - expects cluster ID in AX
     mov cx, 0xffef                          ; Check if we're at the end of the chain
@@ -252,26 +256,17 @@ parse_entry:
     ; Step 2
     ; Copy current cluster to target
     xor dx, dx                              ; Zero DX
-    xor cx, cx
-    mov cl, byte [SectorsPerCluster]        ; Store cluster size in CX
+    movzx cx, byte [SectorsPerCluster]      ; Store cluster size in CX
     sub ax, 2                               ; Subtract from cluster ID
     mul cx                                  ; Multiply by cluster size
-    
+
     add ax, [bp + FIRST_DATA_SECTOR_LOW]    ; Add low word to AX
     adc dx, [bp + FIRST_DATA_SECTOR_HIGH]   ; Add high word to DX with carry
     jc .stop                                ; Give up on overflow
 
-    mov [bp + DAP_BUF_OFFSET], di           ; Store target address in DAP
     mov [bp + DAP_LBA_LOW], ax              ; Store LBA low word
     mov [bp + DAP_LBA_MID_1], dx            ; Store LBA low middle word
     call read_bootdev                       ; Read from boot drive
-    ; --- AX and DX clobbered --- ;
-    xor dx, dx                              ; Zero DX
-    mov ax, cx                              ; Store cluster size in AX
-    mul word [BytesPerSector]               ; Multiply by sector size
-    jc .stop                                ; Give up high word is set
-
-    add di, ax                              ; Increment DI
     jnc .clear                              ; Continue on success
 .stop:
     jmp panic
@@ -327,10 +322,17 @@ parse_entry:
     mov cx, 1                               ; Read just 1 sector
 
     ; Point DAP offset to read buffer
-    mov word [bp + DAP_BUF_OFFSET], read_buf
+    xor si, si                              ; Zero segment (later stores old segment)
+    mov di, read_buf                        ; Read buffer (later stores old offset)
+    xchg [bp + DAP_BUF_OFFSET], di          ; Exchange new offset with  old offset
+    xchg [bp + DAP_BUF_SEGMENT], si         ; Exchange new segment with old segment
 
     ; Read from boot device
     call read_bootdev
+
+    ; Restore old pointer
+    mov [bp + DAP_BUF_OFFSET], di
+    mov [bp + DAP_BUF_SEGMENT], si
     ; --- AX and DX clobbered --- ;
 .read:
     mov ax, [read_buf + bx]                 ; Read cluster ID from calculated offset
@@ -369,8 +371,8 @@ read_bootdev:
     ; for segmentation
     ; - dirty trick
     mov ax, [BytesPerSector]                ; Load sector size
+    xor dx, dx                              ; Zero DX (affects CF?)
     add [bp + DAP_BUF_OFFSET], ax           ; Add it to buffer offset
-    xor dx, dx                              ; Zero DX
     adc dx, 0                               ; Propagate carry
     shl dx, 12                              ; Turn it into a proper segment
     add [bp + DAP_BUF_SEGMENT], dx          ; Add it to buffer segment
