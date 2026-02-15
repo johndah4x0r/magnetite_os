@@ -101,7 +101,7 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
 
     This may be expanded as internal use grows.
 */
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[non_exhaustive]
 pub enum ErrorKind {
     /* Error kinds that require a working OS */
@@ -160,7 +160,7 @@ pub enum ErrorKind {
     This is pretty much the only legal way we can have
     "dynamic typing" in a `no_std` environment.
 */
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[non_exhaustive]
 pub enum ErrorPayload {
     Code(usize),
@@ -176,6 +176,7 @@ pub enum ErrorPayload {
     As we can't assume that dynamic typing will be available,
     we're gonna have to be creative...
 */
+#[derive(Debug)]
 pub struct Error {
     e_kind: ErrorKind,
     e_payload: ErrorPayload,
