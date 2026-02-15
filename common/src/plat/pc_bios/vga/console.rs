@@ -4,7 +4,11 @@
 
 // Wrapper type that assumes internal mutability,
 // and exposes volatile memory operations
+use crate::shared::io::Error;
+use crate::shared::io::Write;
 use crate::shared::structs::volatile::VolatileCell;
+use crate::shared::structs::RingBuf;
+use crate::shared::structs::Array;
 
 // Standard library imports
 use core::slice::from_raw_parts;
@@ -32,12 +36,17 @@ pub const MAX_PAGE: usize = 1;
 // Space character
 pub const CHR_SPACE: u16 = 0x0020;
 
+// Maximum shadow buffer column count (worst-case)
+pub const MAX_SHADOW_COLS: usize = 160;
+
+// Maximum shadow buffer row count (worst-case)
+pub const MAX_SHADOW_ROWS: usize = 50;
+
 // VGA console wrapper type
 // - should be contained within a lock
 // with interior mutability
 //
-// TODO: use `Write'-like traits as
-// soon as they are implemetned
+// TODO: implement shadow buffering
 pub struct VgaConsole {
     addr: usize,
     cols: usize,
@@ -47,6 +56,7 @@ pub struct VgaConsole {
     y: usize,
     attr: u16,
     trunc: bool,
+    shadow: Option<RingBuf<Array<u16, MAX_SHADOW_COLS>, MAX_SHADOW_ROWS>>,
 }
 
 impl VgaConsole {
@@ -64,12 +74,18 @@ impl VgaConsole {
             y: rows - 1,
             attr: DEF_ATTR,
             trunc: true,
+            shadow: None,
         }
     }
 
     // Create new instance of `VgaConsole' with default values
     pub const fn defaults() -> Self {
         Self::new(DEF_BUF_ADDR, DEF_NUM_COLS, DEF_NUM_ROWS)
+    }
+
+    // Internal: initialize the shadow buffer
+    fn init(&mut self) {
+        self.shadow = Some(RingBuf::new());
     }
 
     // Internal: get a linear reference to a page in the text buffer
@@ -121,31 +137,21 @@ impl VgaConsole {
     }
 
     // Internal: scroll the current page by a specific amount
-    // TODO: implement page switching
+    // - this is basically a ring buffer advance
     // FIXME: optimize me!
-    fn scroll_page(&self, n: usize) {
+    fn scroll_page(&mut self, n: usize) {
         // Forcibly clamp `n'
         let m = n.min(self.rows - 1);
 
-        // Copy target lines
-        for r in 0..(self.rows - m) {
-            // Obtain upper and lower lines
-            let upper = unsafe { self.line_get_ref(self.page, r) };
-            let lower = unsafe { self.line_get_ref(self.page, r + m) };
-
-            for c in 0..self.cols {
-                // Transfer cells from the lower line to the upper line
-                upper[c].store(lower[c].load());
-            }
-        }
+        // Advance the shadow buffer by `m` lines
+        // - this is zero-copy, as advancing the
+        // buffer is the same as "scrolling up"
+        self.shadow.rol(m);
 
         // Clear the remaining lines
         for r in (self.rows - m)..self.rows {
             for c in 0..self.cols {
-                let blank = self.attr | CHR_SPACE;
-                unsafe {
-                    self.char_get_ref(self.page, c, r).store(blank);
-                }
+                self.shadow[r][c] = self.attr | CHR_SPACE;
             }
         }
     }
@@ -177,7 +183,7 @@ impl VgaConsole {
     //   (kind of like VT100-compatible terminals)
     // - implement page switching
     #[inline(always)]
-    fn parse_char(&mut self, chr: u8) {
+    fn write_char(&mut self, chr: u8) {
         // - parse special characters
         match chr {
             b'\n' => {
@@ -193,10 +199,9 @@ impl VgaConsole {
 
         // - apply attributes to character, then
         // write it to current cell
-        unsafe {
-            let c = self.attr | (chr as u16);
-            self.char_get_ref(self.page, self.x, self.y).store(c);
-        }
+        let x = self.x;
+        let y = self.y;
+        self.shadow_get_line_mut(y)[x] = self.attr | (chr as u16);
 
         // - update `x'
         self.x += 1;
@@ -208,32 +213,17 @@ impl VgaConsole {
         }
     }
 
-    // Copy bytes from provided buffer to console output
-    #[inline(never)]
-    pub fn write_bytes(&mut self, buf: &[u8]) -> usize {
-        // Obtain the input buffer dimensions, then
-        // fit it to the output buffer dimensions
-        let n = buf.len();
-        let m = n.min(self.cols * self.rows);
+    // Internal: copy shadow buffer contents to the text buffer
+    // TODO: implement page switching and vectorization
+    fn commit(&mut self) {
+        for r in 0..self.rows {
+            let buf_line = unsafe { self.line_get_ref(r, self.page) };
+            let shadow_line = self.shadow_get_line(r);
 
-        // Choose whether to truncate the buffer
-        let b_ref = if self.trunc { &buf[n - m..n] } else { &buf[..] };
-
-        // Obtain the tail of the buffer (so as to
-        // avoid unnecessary copying), then write to
-        // the console character-by-character
-        // FIXME: optimize me!
-        for &chr in b_ref {
-            self.parse_char(chr);
+            for c in 0..self.cols {
+                buf_line[c].store(shadow_line[c]);
+            }
         }
-
-        b_ref.len()
-    }
-
-    // Write string to console output
-    // - basically a wrapper around `write_bytes'
-    pub fn write_str(&mut self, s: &str) -> usize {
-        self.write_bytes(s.as_bytes())
     }
 
     // Set cursor position
@@ -257,9 +247,39 @@ impl VgaConsole {
     }
 
     // Clear screen, without resetting the cursor
-    pub fn clear(&self) {
+    pub fn clear(&mut self) {
         // Scroll up until the screen is visually empty
         self.scroll_page(self.rows - 1);
         self.scroll_page(1);
+    }
+}
+
+impl Write for VgaConsole {
+    // Copy bytes from provided buffer to console output
+    // - this operation should NOT fail under any circumstance
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        // Obtain the input buffer dimensions, then
+        // fit it to the output buffer dimensions
+        let n = buf.len();
+        let m = n.min(self.cols * self.rows);
+
+        // Choose whether to truncate the buffer
+        let b_ref = if self.trunc { &buf[n - m..n] } else { &buf[..] };
+
+        // Obtain the tail of the buffer (so as to
+        // avoid unnecessary copying), then write to
+        // the console character-by-character
+        // FIXME: optimize me!
+        for &chr in b_ref {
+            self.write_char(chr);
+        }
+
+        Ok(b_ref.len())
+    }
+
+    // Flush buffer
+    // TODO: define semantics
+    fn flush(&mut self) -> Result<(), Error> {
+        Ok(())
     }
 }
