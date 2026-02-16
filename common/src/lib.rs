@@ -8,8 +8,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(negative_impls)]
-#![feature(associated_type_defaults)]
 
 // ISA-specific definitions
 pub mod arch;

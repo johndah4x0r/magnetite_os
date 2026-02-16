@@ -39,8 +39,8 @@ use core::mem;
 */
 #[repr(C)]
 pub struct ArrayLike<'a, T> {
-    pub data: *const T,
-    pub size: usize,
+    data: *const T,
+    size: usize,
     _marker: PhantomData<&'a T>,
 }
 
@@ -101,8 +101,8 @@ impl<'a, T> TryFrom<&'a ArrayLike<'a, T>> for &'a [T] {
 */
 #[repr(C)]
 pub struct ArrayLikeMut<'a, T> {
-    pub data: *mut T,
-    pub size: usize,
+    data: *mut T,
+    size: usize,
     _marker: PhantomData<&'a mut T>,
 }
 
