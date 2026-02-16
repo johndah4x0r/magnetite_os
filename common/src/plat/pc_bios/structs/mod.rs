@@ -1,7 +1,5 @@
 /*!
-    Structures specific to the x86, such as the
-    BIOS parameter block and E820 memory layout
-    entries
+    Structures specific to the x86 PC/BIOS platform
 */
 
 /// Short (20 B) E820 entry

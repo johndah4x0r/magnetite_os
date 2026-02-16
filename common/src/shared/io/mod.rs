@@ -95,11 +95,13 @@ pub(crate) fn default_write_fmt<'a, W: Write + ?Sized + 'a>(
     this is mostly a legal detail, and not a functional one)
 */
 
-/*
-    Error kinds that faithfully emulates `std::io::ErrorKind`
+/**
+    Error kinds that faithfully emulates [`std::io::ErrorKind`]
     to the extent permitted by `no_std`.
 
     This may be expanded as internal use grows.
+
+    [`std::io::ErrorKind`]: https://doc.rust-lang.org/stable/std/io/enum.ErrorKind.html
 */
 #[derive(Debug, Copy, Clone)]
 #[non_exhaustive]
@@ -157,27 +159,49 @@ pub enum ErrorKind {
     Uncategorized,
 }
 
-/*
-    A fixed set of error payload types
+/**
+    A finite set of error payload types
 
-    This is pretty much the only legal way we can have
-    "dynamic typing" in a `no_std` environment.
+    Unlike [`std::io::Error`], which can accept dynamically-allocated
+    and dynamically-resolved payloads, [`Error`] can only accept
+    payloads that are known at compile time, owing to the constraints
+    of most `no_std` applications.
+
+    [`std::io::Error`]: https://doc.rust-lang.org/stable/std/io/struct.Error.html
+    [`Error`]: Error
 */
 #[derive(Debug, Copy, Clone)]
 #[non_exhaustive]
 pub enum ErrorPayload {
+    /// Error code
     Code(usize),
+
+    /// Error message
     Message(&'static str),
+
+    /// Other error payload
     Other,
+
+    /// No payload
     Empty,
 }
 
-/*
-    Structure that represents an error, and faithfully emulates
-    `std::io::Error` to the extent permitted by `no_std`.
+/**
+    The error type for I/O operations of the [`Read`], [`Write`],
+    and associated traits.
 
-    As we can't assume that dynamic typing will be available,
-    we're gonna have to be creative...
+    This type faithfully emulates [`std::io::Error`] to the
+    extent permitted by `no_std`.
+
+    Errors mostly originate from implementors of [`Read`] and [`Write`], but
+    custom instances of `Error` can be created with payloads representable
+    by [`ErrorPayload`] and a particular value of [`ErrorKind`].
+
+    [`std::io::Error`]: https://doc.rust-lang.org/stable/std/io/struct.Error.html
+    [`Read`]: Read
+    [`Write`]: Write
+    [`ErrorPayload`]: ErrorPayload
+    [`ErrorKind`]: ErrorKind
 */
 #[derive(Debug)]
 pub struct Error {
@@ -207,11 +231,15 @@ macro_rules! error_define {
     () => {}
 }
 
-// macro to rapidly instantiate `Err(Error)`
-// syntax:
-// - `error!(ErrorKind)`
-// - `error!(other ErrorKind)`
-// - `error!(ErrorKind, ErrorPayload, literal)`
+/*
+    A macro to rapidly instantiate `Err(Error)`
+
+    # Syntax
+    This macro accepts the following invocations
+    - `error!(ErrorKind)`
+    - `error!(other ErrorKind)`
+    - `error!(ErrorKind, ErrorPayload, literal)`
+*/
 macro_rules! error {
     ($e_kind:ident) => {
         Err(Error {

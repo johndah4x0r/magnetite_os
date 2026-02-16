@@ -1,5 +1,5 @@
 /*!
-    Definitions specific to the PC BIOS platform
+    Definitions specific to the PC/BIOS platform
 */
 
 // BIOS-specific structures, such as the
