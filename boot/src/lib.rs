@@ -26,7 +26,7 @@ static MSG_DOUBLE_PANIC: &'static str =
 static mut PANIC_FLAG: usize = 0;
 
 // Instantiate VGA console with default values
-static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(VgaConsole::defaults());
+static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(unsafe { VgaConsole::defaults() });
 
 // Initial routine
 //  - call it 'main' for the sake of brevity
@@ -39,21 +39,21 @@ pub extern "C" fn main(
     _e820_map: &'static ArrayLike<'static, LongE820>,
 ) -> ! {
     // Obtain lock handle
-    let mut console = VGA_CONSOLE.lock();
+    let mut handle = VGA_CONSOLE.lock();
 
     // Clear screen
-    console.clear().unwrap();
+    handle.clear().unwrap();
 
     // Initialize the shadow buffer
-    console.init();
+    handle.init();
 
     // Write to screen
-    writeln!(&mut console, "Hello, world!").unwrap();
-    writeln!(&mut console, "This is a test!").unwrap();
-    writeln!(&mut console, "The quick brown fox jumps over the lazy dog").unwrap();
+    writeln!(&mut handle, "Hello, world!").unwrap();
+    writeln!(&mut handle, "This is a test!").unwrap();
+    writeln!(&mut handle, "The quick brown fox jumps over the lazy dog").unwrap();
 
     // Commit changes
-    console.flush().unwrap();
+    handle.flush().unwrap();
 
     loop {}
 }

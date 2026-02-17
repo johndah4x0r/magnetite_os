@@ -13,6 +13,7 @@ use crate::shared::structs::{Array, RingBuf};
 use crate::shared::io::{Error, Write};
 
 // Standard library imports
+use core::marker::PhantomData;
 use core::slice::from_raw_parts;
 
 /*
@@ -20,38 +21,64 @@ use core::slice::from_raw_parts;
     (assuming VGA mode 3, which is 80x25 colored text mode)
 */
 
-// Default memory address for the text buffer
+/// Default memory address for the VGA text buffer
 pub const DEF_BUF_ADDR: usize = 0xb8000;
 
-// Default number of columns
+/// Default number of columns
 pub const DEF_NUM_COLS: usize = 80;
 
-// Default number of rows
+/// Default number of rows
 pub const DEF_NUM_ROWS: usize = 25;
 
-// Default attribute word (dark white on black)
+/// Default attribute word (dark white on black)
 pub const DEF_ATTR: u16 = 0x0700;
 
-// Maximum page count
+/// Maximum page count
 pub const MAX_PAGE: usize = 1;
 
-// Space character
+/// Space character
 pub const CHR_SPACE: u16 = 0x0020;
 
-// Maximum shadow buffer column count (worst-case)
+/// Maximum shadow buffer column count (worst-case)
 pub const MAX_SHADOW_COLS: usize = 160;
 
-// Maximum shadow buffer row count (worst-case)
+/// Maximum shadow buffer row count (wosrt-case)
 pub const MAX_SHADOW_ROWS: usize = 50;
 
-// VGA console wrapper type
-// - should be contained within a lock
-// with interior mutability
-//
+/**
+    VGA console wrapper type
+
+    # Safe application
+    As this type assumes mutability, and the fact that
+    instances of `VgaConsole` *may* be shared between
+    threads, it is highly recommended that any instances
+    are contained within a thread-safe lock with interior
+    mutability, such as [`Mutex`].
+
+    An example applicatios following such advice is as follows:
+    ```rust
+    use common::shared::io::Write;
+    use common::shared::structs:spin_lock::Mutex;
+    use common::plat::pc_bios::vga::console::VgaConsole;
+
+    static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(VgaConsole::defaults());
+
+    fn hello() {
+        let mut handle = VGA_CONSOLE.lock();
+        writeln!(&mut handle, "Hello, world!").unwrap();
+    }
+    ```
+
+    [`Mutex`]: crate::shared::structs::spin_lock::Mutex
+*/
+
+// - lifetime is made explicit, as we are
+// dealing with raw pointer arithmetic
 // TODO: refine shadow buffering
 // TODO: implement page switching
-pub struct VgaConsole {
-    addr: usize,
+#[repr(C)]
+pub struct VgaConsole<'a> {
+    buf: *const VolatileCell<u16>,
     cols: usize,
     rows: usize,
     page: usize,
@@ -59,19 +86,33 @@ pub struct VgaConsole {
     y: usize,
     attr: u16,
     trunc: bool,
-    shadow: Option<RingBuf<Array<u16, MAX_SHADOW_COLS>, MAX_SHADOW_ROWS>>,
     buffered: bool,
+    shadow: Option<RingBuf<Array<u16, MAX_SHADOW_COLS>, MAX_SHADOW_ROWS>>,
+    _marker: PhantomData<&'a VolatileCell<u16>>,
 }
 
-impl VgaConsole {
-    // Create new instance of `VgaConsole'
-    // - we trust that the provided dimensions are sane
-    pub const fn new(addr: usize, cols: usize, rows: usize) -> Self {
+impl VgaConsole<'_> {
+    /**
+        Create new instance of `VgaConsole`
+
+        # Safety
+        It is the instantiator's responsibility to ensure that `addr`
+        points to valid video memory, and that the provided dimensions
+        `cols` and `rows`
+        - are correct for the current video mode, and
+        - if page-switching is reported, `addr + 2 * N * cols * rows`
+        does not exceed valid video memory
+    */
+    pub const unsafe fn new(buf: *const VolatileCell<u16>, cols: usize, rows: usize) -> Self {
         // Set address and dimensions, and then
         // never touch them again...
         // (currently configured to work like a typewriter)
+        // - using `&'a VolatileCell<u16>` is unfortunately
+        // UB, as it has no provenance ...which means that
+        // we're operationg at the very edge of UB, which
+        // is not fun
         VgaConsole {
-            addr,
+            buf,
             cols,
             rows,
             page: 0,
@@ -79,19 +120,31 @@ impl VgaConsole {
             y: rows - 1,
             attr: DEF_ATTR,
             trunc: true,
-            shadow: None,
             buffered: false,
+            shadow: None,
+            _marker: PhantomData,
         }
     }
 
-    // Create new instance of `VgaConsole' with default values
-    pub const fn defaults() -> Self {
-        Self::new(DEF_BUF_ADDR, DEF_NUM_COLS, DEF_NUM_ROWS)
+    /**
+        Create new instance of `VgaConsole` with default values
+
+        # Safety
+        It is the instantiator's responsibility to ensure that, at the minimum,
+        - logical range `0xb0000-0xbffff` maps to VGA text memory
+        at physical range `0xb0000-0xbffff`
+        - VGA video mode is set to mode `0x03` (80x25 text mode)
+    */
+    pub const unsafe fn defaults() -> Self {
+        unsafe { Self::new(DEF_BUF_ADDR as *const _, DEF_NUM_COLS, DEF_NUM_ROWS) }
     }
 
-    // Initialize the shadow buffer
-    // - not strictly necessary for normal use, but
-    // performance may degrade significantly
+    /**
+        Initialize the internal shadow buffer
+
+        This is not strictly necessary for normal use,
+        but performance may degrade significantly.
+    */
     pub fn init(&mut self) {
         // Only allow buffering if dimensions are
         // within "worst-case" bounds
@@ -101,14 +154,14 @@ impl VgaConsole {
         }
     }
 
-    // Check whether the console is shadow-buffered
+    /// Check whether the console uses shadow-buffering
     pub fn is_shadowed(&self) -> bool {
         // - use state of `self.shadow` in case
         // `self.buffered` is set for some reason
         self.buffered && self.shadow.is_some()
     }
 
-    // Attempt to enable shadow buffering
+    /// Attempt to enable shadow-buffering
     // - returns `Ok(bool)` on success, and `Err(())` on failure
     // TODO: synchronize contents with the text buffer
     pub fn try_set_shadowed(&mut self) -> Result<bool, ()> {
@@ -126,13 +179,17 @@ impl VgaConsole {
         }
     }
 
-    // Disable shadow buffering
+    /// Disable shadow buffering
     // (without throwing away the buffer, of course)
     pub fn unset_shadowed(&mut self) {
         self.buffered = false;
     }
 
-    // Set cursor position
+    /**
+        Set cursor position
+
+        Currently does nothing.
+    */
     // TODO: move hardware cursor
     pub fn set_cursor_pos(&mut self, x: usize, y: usize) {
         // Clamp provided coordinates
@@ -140,19 +197,19 @@ impl VgaConsole {
         self.y = y.min(self.rows - 1);
     }
 
-    // Get truncation mode
+    /// Get truncation mode
     pub fn get_trunc(&self) -> bool {
         self.trunc
     }
 
-    // Set truncation mode
+    /// Set truncation mode
     // - faithful terminal emulation conflicts
     // with time-saving truncation
     pub fn set_trunc(&mut self, t: bool) {
         self.trunc = t;
     }
 
-    // Clear screen, without resetting the cursor
+    /// Clear screen, without resetting the cursor
     // - not strictly required by `Write`
     pub fn clear(&mut self) -> Result<(), Error> {
         // Scroll up until the screen is visually empty
@@ -173,10 +230,11 @@ impl VgaConsole {
     // valid area in video memory.
     #[inline(always)]
     unsafe fn buf_get_ref(&self, page: usize) -> &[VolatileCell<u16>] {
+        // - calculate number of cells per page
         let n = self.cols * self.rows;
-        let addr = self.addr + 2 * n * page;
 
-        unsafe { from_raw_parts(addr as *const _, n) }
+        // - `pointer::add` antics are counter-intuitive, innit?
+        unsafe { from_raw_parts(self.buf.add(page * n), n) }
     }
 
     // Internal: get a reference to a specific
@@ -345,8 +403,7 @@ impl VgaConsole {
     // TODO: implement page switching and vectorization
     #[inline(always)]
     fn commit(&mut self) {
-        // - do not perform flush if shadow-buffering
-        // is either unavailable or disabled
+        // - perform flush only if shadowing is enabled
         if self.is_shadowed() {
             // - trust that the buffer is initialized
             let shadow = self.shadow.as_ref().unwrap();
@@ -367,7 +424,7 @@ impl VgaConsole {
     }
 }
 
-impl Write for VgaConsole {
+impl Write for VgaConsole<'_> {
     // Copy bytes from provided buffer to console
     // output WITHOUT committing changes
     // - this operation should NOT fail under any circumstance
@@ -379,7 +436,7 @@ impl Write for VgaConsole {
         let m = n.min(self.cols * self.rows);
 
         // Choose whether to truncate the buffer
-        let b_ref = if self.trunc { &buf[n - m..n] } else { &buf[..] };
+        let b_ref = if self.trunc { &buf[n-m..] } else { &buf[..] };
 
         // Obtain the tail of the buffer (so as to
         // avoid unnecessary copying), then write to
@@ -401,3 +458,7 @@ impl Write for VgaConsole {
         Ok(())
     }
 }
+
+// - YOLO!
+unsafe impl Sync for VgaConsole<'_> {}
+unsafe impl Send for VgaConsole<'_> {}
