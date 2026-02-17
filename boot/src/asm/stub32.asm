@@ -15,7 +15,9 @@
 %include "boot/src/asm/defs.asm"
 
 ; Define external labels
-extern _stub64                      ; Wrapped 64-bit code label
+extern _stub64                              ; Wrapped 64-bit code label
+extern _base_s2_end                         ; End of the stage-2 loader (used as a base)
+extern _sizeof_s2_ldr                       ; Stage-2 loader binary size
 
 ; Include 16-bit stub
 %include "boot/src/asm/stub16.asm"
@@ -28,7 +30,7 @@ _stub32:
     ; Kill interrupts (if they are still active)
     cli
     xchg bx, bx                             ; Breakpoint
-    mov eax, gdt32.kern_ds                  ; Point to kernel data segment
+    mov ax, gdt32.kern_ds                   ; Point to kernel data segment
 
     ; - Set data segments
     mov ds, ax
@@ -38,16 +40,42 @@ _stub32:
 
     ; - reset stack
     mov ss, ax                              ; Set stack segment register
-    mov esp, 0x7b00                         ; Reset stack pointer
+    mov esp, INIT_STACK                     ; Reset stack pointer
 
     ; Load defined quantities into memory
     ; (for compatibility reasons)
-    mov eax, ADDR_E820_MAP
     mov ebx, OEM_LABEL
+    mov [oem_label.low], ebx                ; BPB location
 
-    ; Store them locally
-    mov [e820_map.low], eax     ; E820 map location
-    mov [oem_label.low], ebx    ; BPB location
+; Find a page-aligned location after the
+; E820 map, then set it as the paging
+; structures base
+calc_paging:
+    mov ebx, [e820_map.low]                 ; obtain pointer to descriptor
+
+    mov ecx, SIZEOF_E820_ENTRY              ; obtain entry size
+    mov eax, [ebx + E820_DESC_SIZE]         ; obtain entry count
+    mul ecx                                 ; (EAX now contains the array size in bytes)
+
+    add ecx, E820_DESC_END - E820_DESC_ADDR ; include descriptor size in ECX
+    adc ebx, ecx                            ; advance EBX by the total map size                   
+    adc edx, 0                              ; propagate carry, if any
+    jc .stop
+
+    and bx, 0xf000                          ; discard the lower 12 bits of EBX
+    mov ecx, 0x1000                         ; advance EDX:EBX by 0x1000
+    add ebx, ecx                            ; (here)
+    adc edx, 0                              ; (propagate carry)
+    jnc .end
+
+    test edx, edx                           ; check whether EDX:EBX exceeds 4 GiB
+    jz .end                                 ; proceed if EDX = 0 and EBX is within bounds
+    ; --- fall-through on failure --- ;
+.stop:
+    lea esi, [msgs.overflow]
+    call panicb
+.end:
+    mov [page_structs.low], ebx             ; Store the now-base for paging structures
 
 ; Check if long mode is supported
 ; - CPUID is assumed to be supported,
@@ -86,54 +114,68 @@ disable_paging32:
 ; TODO: maybe consider higher-half mapping
 ;       in addition to identity mapping
 init_paging:
-    xchg bx, bx                 ; Breakpoint
+    xchg bx, bx                     ; Breakpoint
+
+    ; Obtain location of paging structures
+    ; (identical to the PML4 address)
+    mov ebx, [page_structs.low]     ; (play paranoid!)
 
     ; Clear the master page hierarchy
-    lea edi, [PML4T_ADDR]       ; Point EDI to the highest table
-    mov cr3, edi                ; Let the CPU know where the tables are
+    lea edi, [ebx + OFFSET_PML4]   ; Point EDI to the highest table
+    mov cr3, edi                    ; Let the CPU know where the tables are
 
-    ; Write 4 * 1kiB, which should cover
+    ; Write 4 * 4 kiB, which should cover
     ; all four hierarchy levels
     xor eax, eax
-    mov ecx, SIZEOF_PT
-    rep stosd
+    mov ecx, SIZEOF_PT                  ; (should be 4096 B)
+    rep stosd                           ; (write 4 * 4096 B)
 
-    xchg bx, bx                 ; Breakpoint
-    mov edi, cr3                ; Reset EDI back to the highest table
+    xchg bx, bx                         ; Breakpoint
+    mov edi, cr3                        ; Reset EDI back to the highest table
 
 .set_flags:
     ; Set flags for each level
     ; - EDI is equal to PML4 address
-    mov dword [edi], PDPT_ADDR & PT_ADDR_MASK | PT_PRESENT | PT_READWRITE
+    lea eax, [ebx + OFFSET_PDPT]        ; Obtain address for PDPT
+    and ax, 0xf000                      ; Mask off lower 12 bits
+    or eax, PT_PRESENT | PT_READWRITE   ; Apply flags
 
-    mov edi, PDPT_ADDR
-    mov dword [edi], PDT_ADDR & PT_ADDR_MASK | PT_PRESENT | PT_READWRITE
+    mov dword [ebx + OFFSET_PML4], eax  ; Write entry to PML4
 
-    mov edi, PDT_ADDR
-    mov dword [edi], PT_ADDR & PT_ADDR_MASK | PT_PRESENT | PT_READWRITE
+    lea eax, [ebx + OFFSET_PDT]         ; Obtain address for PDT
+    and ax, 0xf000                      ; Mask off lower 12 bits
+    or eax, PT_PRESENT | PT_READWRITE   ; Apply flags
+
+    mov dword [ebx + OFFSET_PDPT], eax  ; Write to PDPT
+
+    lea eax, [ebx + OFFSET_PT]          ; Obtain address for PT
+    and ax, 0xf000                      ; Mask off lower 12 bits
+    or eax, PT_PRESENT | PT_READWRITE   ; Apply flags
+
+    mov dword [ebx + OFFSET_PDT], eax   ; Write entry to PDT
 
 .fill_pt:
     ; Populate PT 0 to identity-map 0-2 MiB
     ; - which means using standard pages
-    lea edi, [PT_ADDR]          ; Point EDI to PT 0
+    lea edi, [ebx + OFFSET_PT]          ; Point EDI to PT 0
 
     ; - set flags
     ; - map PT 0, page 0 to 0-4 kiB
-    mov eax, PT_PRESENT | PT_READWRITE
-    mov ecx, ENTRIES_PER_PT     ; Fill PT 0
-
+    xor eax, eax                        ; Zero page index
+    mov eax, PT_PRESENT | PT_READWRITE  ; Apply these flags
+    mov ecx, ENTRIES_PER_PT             ; Fill PT 0 with this many entries
 .set_entry_ident:
-    mov dword [edi], eax        ; Write entry to [EDI]
-    add eax, SIZEOF_PAGE        ; Map next physical page
-    add edi, SIZEOF_PT_ENTRY    ; Write to next entry
+    mov dword [edi], eax                ; Write entry to [EDI]
+    add eax, SIZEOF_PAGE                ; Map next physical page
+    add edi, SIZEOF_PT_ENTRY            ; Write to next entry
     loop .set_entry_ident
 .end:
-    xchg bx, bx                 ; Breakpoint
+    xchg bx, bx                         ; Breakpoint
 
 .enable_pae:
-    mov eax, cr4                ; Load CR4 into EAX
-    or eax, PAE_ENABLE          ; Enable PAE in CR4
-    mov cr4, eax                ; Store modified CR4
+    mov eax, cr4                        ; Load CR4 into EAX
+    or eax, PAE_ENABLE                  ; Enable PAE in CR4
+    mov cr4, eax                        ; Store modified CR4
 
 ; Enable long mode and hand over
 ; control to 64-bit code
@@ -194,7 +236,7 @@ enable_lm:
 printb:
     ; Initialize VGA-compatible character
     xor ax, ax                  ; Zero AX
-    mov ah, 0x0f                ; White-on-black
+    mov ah, 0xf0                ; Black-on-white
 
     ; Set target to 0xb8000
     mov edi, 0xb8000
@@ -292,7 +334,9 @@ msgs:
     .got_id     db "CPU vendor string: ", 0
     .caught_ud  db "Caught #UD at CS:IP = ", 0
     .e820       db "Failed to generate memory layout map", 0
+    .overflow   db "Arithmetic overflow", 0
     .reset      db "Replace boot device, and press <Enter> to reset", 0
+
     .crlf       db 0x0a, 0x0d, 0
 
 ; Nibble characters
@@ -309,6 +353,7 @@ signature:
     .mid        dd 0
     .high       dd 0
     .null       db 0
+    .pad        align 8
 
 ; Pointer to BPB (32-bit pointer extended to 64-bit)
 oem_label:
@@ -322,5 +367,10 @@ bootdev:
 
 ; Pointer to E820 map (32-bit pointer extended to 64-bit)
 e820_map:
+    .low        dd 0
+    .high       dd 0
+
+; Pointer to paging structures (32-bit pointer extended to 64-bit)
+page_structs:
     .low        dd 0
     .high       dd 0

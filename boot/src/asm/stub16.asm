@@ -21,16 +21,14 @@
 ; --- Main routine --- ;
 section .stub16
 _stub16:
-    ; Header (like, c'mon?)
+    ; Header (16)
     ; 0a. (3) 16-bit near jump (e9 RR RR)
-    ; 0b. (6) zero-extension (00 00 00 00 00 00)
-    ; 1.  (3) zero padding (00 00 00)
-    ; 2.  (8) ZX 32-bit offset to '_start' (VV VV VV VV 00 00 00 00)
+    ; 0b. (1) byte extension (90)
+    ; 1.  (4) 32-bit size of stage-2 loader
     jmp word .start
-.pad:
-    times 12-($-$$) db 0
-.handover_offset:
-    dd _stub64 - _stub16, 0                 ; (offset provided by 'stub32.asm')
+    nop
+.binsize:
+    dd _sizeof_s2_ldr                       ; (size provided by linker)
 .start:
     cli                                     ; FA - Kill interrupts
     xchg bx, bx                             ; 87 DB - Bochs breakpoint
@@ -118,8 +116,18 @@ cpu_check:
     push msgs.got_id                        ; Preamble
     call print
 .done:
+    ; - calculate `_base_s2_end` indirectly
+    lea eax, _stub16
+    add eax, [_stub16.binsize]
+
+    ; Check for 16-byte alignment
+    test ax, 0x000f                         ; Check the lowest nibble (16-byte "page")
+    jz .aligned                             ; Skip alignment if already aligned
+    and ax, 0xfff0                          ; Discard lowest nibble
+    add ax, 0x0010                          ; Increment nibble (basically apply `ceil(ax)`)
+.aligned:
+    mov [e820_map.low], eax                 ; store it as the location for the E820 map
     sti                                     ; Restore interrupts
-    ; TODO
 
 ; Scan for memory using E820
 e820_scan:
@@ -132,8 +140,8 @@ e820_scan:
     jc .stop                                ; Do not proceed if memory
                                             ; size cannot be assessed
 
-    cmp ax, 128                             ; Make sure we have at least 
-                                            ; 128 kB of continuous memory
+    cmp ax, 256                             ; Make sure we have at least 
+                                            ; 256 kB of continuous memory
 
     jge .cont                               ; Proceed if true
     ; --- fall-through --- ;
@@ -141,18 +149,72 @@ e820_scan:
     mov si, msgs.e820                       ; Point SI to reason message
     call panic                              ; Call panic routine
 .cont:
-    lea edi, [ADDR_E820_MAP + 16]           ; Store map at ADDR_E820_MAP + 16
+    ; Store map at `[e820_map.low] + E820_DESC_END`
+    mov esi, [e820_map.low]
+    lea edi, [esi + E820_DESC_END]          ; - wide address in EDI
+
+    ; Calculate segment:offset equivalent
+    ; of wide address in EDI, then store
+    ; it in ES:DI
+    mov edx, edi                            ; Copy wide address into EDX
+    mov ax, di                              ; Copy lower-half into AX
+    mov cx, 16                              ; Set CX = 16, as it can be used later
+    shr edx, cl                             ; Make DX show the upper half of EDI
+    ; (EDI is now in DX:AX form)
+
+    ; Divide DX:AX by 16, so that
+    ; - AX contains the quotient (segment)
+    ; - DX contains the remainder (offset)
+    div cx
+
+    mov es, ax                              ; Set ES = AX
+    mov di, dx                              ; Set DI = DX
+
     xor esi, esi                            ; Zero entry count
     xor ebx, ebx                            ; Zero EBX
 .seek:
     xchg bx, bx                             ; Breakpoint
-    cmp esi, E820_ENTRIES                   ; Do not proceed beyond
-                                            ; this many entries
-    jge .end                                ; - skip if true
+    cmp esi, E820_ENTRIES                   ; Do not generate more than `E820_ENTRIES`
+    jge .end                                ; (skip if `ESI >= E820_ENTRIES`)
 
-    mov dword [edi + 20], 1                 ; Force valid ACPI 3.x entry
+    ; Save current value of ES
+    mov cx, es
 
-    mov eax, 0xe820                         ; Set call number
+    ; Perform segmentation-friendly
+    ; pointer advance
+    xor dx, dx
+    mov bx, di                              ; Set BX = DI
+    mov ax, es                              ; Set AX = ES
+    add bx, 4                               ; Advance BX by 4 bytes
+    adc dx, 0                               ; Preserve carry
+    jc .stop                                ; Stop on overflow
+    shl dx, 12                              ; Calculate segment equivalent
+    adc ax, dx                              ; Increment segment
+    jc .stop                                ; Stop on overflow
+    mov es, ax                              ; Update ES
+
+    mov word es:[bx], 0x0001                ; Force valid ACPI 3.x entry
+
+    ; Perform segmentation-friendly
+    ; pointer advance
+    xor dx, dx
+    add bx, 2                               ; Advance BX by 2 bytes
+    adc dx, 0                               ; Preserve carry
+    jc .stop                                ; Stop on overflow
+    shl dx, 12                              ; Calculate segment equivalent
+    adc ax, dx                              ; Increment segment
+    jc .stop                                ; Stop on overflow
+    mov es, ax
+    mov word es:[bx], 0x0000
+
+    ; Restore old value of ES
+    mov es, cx
+
+    ; Prepare call to E820
+    ; - we assume that ES:DI has been
+    ; correctly calculated in the last
+    ; iteration
+    mov eax, 0x0000e820                     ; Set call number
     mov edx, 0x534d4150                     ; String: 'SMAP' (big-endian)
     mov ecx, 24                             ; Ask for 24-byte entries
     int 0x15                                ; Call BIOS
@@ -160,7 +222,18 @@ e820_scan:
     cmp eax, 0x534d4150                     ; String: 'SMAP' (big-endian)
     jne .verify                             ; We're also done already...
 
-    add edi, 24                             ; Move EDI to the next 24-byte slot
+    ; Perform segmentation-friendly
+    ; pointer advance
+    xor dx, dx
+    mov ax, es                              ; Set AX = ES
+    add di, 24                              ; Advance DI by 24 bytes
+    adc dx, 0                               ; Preserve carry
+    jc .stop                                ; Stop on overflow
+    shl dx, 12                              ; Calculate segment equivalent
+    adc ax, dx                              ; Increment segment
+    jc .stop                                ; Stop on overflow
+    mov es, ax
+
     inc esi                                 ; Increase entry count
     test ebx, ebx                           ; Test completion flag
     jnz .seek                               ; Continue if not complete
@@ -169,20 +242,40 @@ e820_scan:
     test esi, esi                           ; Check if we're at the first invocation
     jz .stop                                ; Panic if error occured on the first try
 .end:
+    xchg bx, bx
+
+    ; Zero ES
+    xor ax, ax
+    mov es, ax
+
     ; Store zero-extended base and entry count
     ; - If entry count was to exceed
     ; 2**32 - 1 (which shouldn't happen),
     ; then something's already wrong, and
     ; missing other areas wouldn't be the
     ; worst of our problems
-    lea ebx, [ADDR_E820_MAP + 16]           ; Calculate array base
-    mov [ADDR_E820_MAP], ebx                ; Store array base
-    xor ebx, ebx
-    mov [ADDR_E820_MAP + 4], ebx            ; Zero-extend
+    mov eax, [e820_map.low]
+    push esi
+    mov esi, eax
 
-    mov [ADDR_E820_MAP + 8], esi            ; Store entry count
+
+    xor edx, edx
+    mov ecx, 16
+    div ecx
+
+    mov es, ax
+    mov di, dx
+
+    lea ebx, [esi + E820_DESC_END]          ; Calculate array base
+    pop esi
+
+    mov es:[di + E820_DESC_ADDR], ebx       ; Store array base
+    xor ebx, ebx
+    mov es:[di + E820_DESC_ADDR + 4], ebx   ; Zero-extend
+
+    mov es:[di + E820_DESC_SIZE], esi       ; Store entry count
     xor esi, esi
-    mov [ADDR_E820_MAP + 12], esi           ; Zero-extend
+    mov es:[di + E820_DESC_SIZE + 4], esi   ; Zero-extend
 
 ; Enable A20 gate - fast
 fast_a20:
@@ -210,6 +303,8 @@ fast_a20:
 .fast_a20_after:
     xchg bx, bx                             ; Breakpoint in Bochs 
 
+create_e820_desc:
+
 ; Enter 32-bit protected mode
 enter_pm:
     ; Here we go...
@@ -227,6 +322,9 @@ enter_pm:
 ; - SI: pointer to reason string
 panic:
     xchg bx, bx                             ; Breakpoint in Bochs
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
 
     pop ax                                  ; Pop calling IP to AX
     mov dx, cs                              ; Store CS in DX

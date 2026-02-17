@@ -73,17 +73,15 @@ _start:
     ; - hopefully, we have more than enough
     ;   space, and that the stack actually
     ;   moves downwards
-    ; - set a 256 B buffer between bottom
+    ; - set a `256-ALLOC_SIZE` B buffer between bottom
     ;   of stack and boot sector start
     mov ss, ax
-    mov sp, 0x7b00
+    mov sp, INIT_STACK                      ; (stack at INIT_SP)
+    mov bp, INIT_FRAME                      ; (global frame at INIT_SP + ALLOC_SIZE)
 
     ; Initialize frames
     ; (don't you hate this?)
     cld                                     ; Clear DF
-    mov bp, sp                              ; Set BP = SP (= 0x7c00, maybe?)
-    sub sp, ALLOC_SIZE                      ; Allocate this many bytes (+2 bytes guard)
-
     lea di, [bp + DAP_FRAME]                ; Point DI to DAP
     mov cx, 8                               ; Zero out 8 words
     rep stosw                               ; (here)
@@ -149,7 +147,9 @@ compute_sectors:
     ; the FAT region ends (there are usually
     ; more than one FATs in most volumes)
     mov ax, [SectorsPerTab]                 ; Store FAT size
-    mul word [FatCount]                     ; Multiply it by the FAT count
+    xor bx, bx
+    mov bl, [FatCount]                      ; Multiply it by the FAT count
+    mul bl                                  ; (here)
 
     add ax, [bp + FIRST_FAT_SECTOR_LOW]     ; Add low word of FAT LBA
     adc dx, [bp + FIRST_FAT_SECTOR_HIGH]    ; Add high word of FAT LBA with carry
@@ -256,7 +256,8 @@ parse_entry:
     ; Step 2
     ; Copy current cluster to target
     xor dx, dx                              ; Zero DX
-    movzx cx, byte [SectorsPerCluster]      ; Store cluster size in CX
+    xor cx, cx                              ; Zero CX (do not use MOVZX)
+    mov cl, byte [SectorsPerCluster]        ; Store cluster size in CX
     sub ax, 2                               ; Subtract from cluster ID
     mul cx                                  ; Multiply by cluster size
 
@@ -304,20 +305,21 @@ parse_entry:
     ; 64 kiB sectors?)
 
     ; Step 4
-    ; Read next cluster ID from FAT
-    ; (LBA in DX:AX, offset in BX)
+    ; Read next cluster ID from FAT if we
+    ; have exhausted the FAT window cache
+    ; (LBA in DX:AX, offset in 0:BX)
     cmp ax, [bp + LAST_ACCESSED_LOW]        ; Compare low word of cached LBA
     jne .replenish                          ; Replenish buffer on mismatch
     cmp dx, [bp + LAST_ACCESSED_HIGH]       ; Compare high word of cached LBA
     je .read                                ; Proceed on match
     ; --- fall-through on mismatch --- ;
 .replenish:
-    ; FIXME: potential redundancy
+    ; Save new LBA
     mov [bp + LAST_ACCESSED_LOW], ax        ; Save low word of new LBA
     mov [bp + LAST_ACCESSED_HIGH], dx       ; Save high word of new LBA
 
-    mov [bp + DAP_LBA_LOW], ax
-    mov [bp + DAP_LBA_MID_1], dx
+    mov [bp + DAP_LBA_LOW], ax              ; Point DAP to new LBA
+    mov [bp + DAP_LBA_MID_1], dx            ; (load high word here)
 
     mov cx, 1                               ; Read just 1 sector
 
@@ -335,7 +337,7 @@ parse_entry:
     mov [bp + DAP_BUF_SEGMENT], si
     ; --- AX and DX clobbered --- ;
 .read:
-    mov ax, [read_buf + bx]                 ; Read cluster ID from calculated offset
+    mov ax, [read_buf + bx]                 ; Read cluster ID from calculated offset (see `.clear`)
     jmp .top                                ; Go back to top of loop
 .done:
     mov al, [bp + BOOT_DEV]
@@ -344,14 +346,13 @@ parse_entry:
 
 ; --- Routines --- ;
 ; Read from boot drive
-; Clobbers: AX, DX, SI
 ; - this one may be a little hard to read
-; - BP = init. SP = 0x7b00, DS = ES = CS = 0
+; - BP = 0x7b00, DS = ES = CS = 0
 ; Accepts:
 ; - CX: number of sectors to read
-; - dap.lba: 32-bit LBA (incremented by the function)
-; - dap.buf_offset: target buffer offset
-; - dap.buf_segment: target buffer segment
+; - dap.lba: 32-bit LBA (auto-increment)
+; - dap.buf_offset: target buffer offset (auto-increment)
+; - dap.buf_segment: target buffer segment (auto-increment)
 read_bootdev:
     pusha
     mov word [bp + DAP_NUM_SECTORS], 1      ; Load just 1 sector per iteration

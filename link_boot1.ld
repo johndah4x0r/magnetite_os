@@ -1,13 +1,14 @@
 /*
     Linker script for stitching together
-    'boot64_wrap.o' and 'stub32.o' into
+    'boot64.o' and 'stub32.o' into
     'boot1.bin'
 */
 
-ENTRY(_stub16)                          /* make sure _stub32 exists */
+ENTRY(_stub16)                          /* make sure _stub16 exists */
 
 SECTIONS {
-    . = 0x9000;                         /* hard-coded entry point in definitions file */
+    _addr_s2_ldr = 0x00009000;              /* hard-coded entry point in definitions file */
+    . = _addr_s2_ldr;
 
     /* Text + data (flat binary) */
     .text : SUBALIGN(1) {
@@ -25,5 +26,12 @@ SECTIONS {
         */
         . = ALIGN(16);
         *(.boot64.text .boot64.data)
+
+        /* End of the stage-2 loader */
+        . = ALIGN(16);
+        _base_s2_end = .;
+
+        /* Size of stage-2 loader (in bytes) */
+        _sizeof_s2_ldr = _base_s2_end - _addr_s2_ldr;
     }
 }

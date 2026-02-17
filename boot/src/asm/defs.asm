@@ -5,18 +5,22 @@
 ; as we're merely storing definitions here
 
 ; Low Memory is used as follows:
-; * 0x00500-0x00fff - Unused (1280 B)
-; * 0x01000-0x06fff - E820 memory map (24 kB)
-; * 0x07000-0x07af0 - stack (to be relocated)
-; * 0x07b00-0x07bff - guard region (not enforced)
-; * 0x07c00-0x07dff - boot record (512 B)
-; * 0x07e00-0x08bff - read buffer (4 kB, accept overrun in initial stage)
-; * 0x08e00-0x08fff - guard region (not enforced)
-; * 0x09000-0x0ffff - second-stage loader (up to 24 kB)
-; * 0x10000-0x10fff - guard region (not enforced)
-; * 0x11000-0x14fff - page tables
-; * 0x15000-0x1ffff - minimum usable memory (128 kB)
-; * 0x20000-0x7ffff - maximum usable memory (>128 kB)
+; * 0x00000 .. 0x00fff                                      (do not touch)
+; * 0x01000 .. 0x07aff                                      stack @ 0x7b00
+; * 0x07b?? .. 0x07bff                                      stack underflow limit (used by stack frame, not enforced)
+; * 0x07c00 .. 0x07dff                                      boot record (512 B)
+; * 0x07e00 .. 0x08bff                                      read buffer (4 kB, accept overrun in initial stage)
+; * 0x08e00 .. 0x08fff                                      buffer overflow limit (not enforced)
+; Addresses relative to `ADDR_S2_LDR := 0x09000`
+; are as follows (increments go left-to-right,
+; top-right-to-bottom-left):
+; * + 0 .. + _sizeof_s2_ldr                                 Stage-2 loader (dynamically sized; see `/link_boot1.ld`)
+; * + E820_DESC_ADDR .. + n * SIZEOF_E820_ENTRY             E820 map (dynamically sized)
+; * + OFFSET_PTS .. + SIZEOF_PTS                            Paging structures (may expand in the future)          
+
+; The limit regions are kind of like the double solid-yellow
+; lines on a mountain road; cross them only if you feel like
+; dying in a ball of fire.
 
 ; Definitions for 'boot/src/asm/vbr.asm'
 ; and 'boot/src/asm/stub16.asm'
@@ -24,10 +28,19 @@ START_VECTOR                equ 0x7c00                      ; Start vector
 SIZEOF_MAGIC                equ 3                           ; Size of magic numbers
 OEM_LABEL                   equ START_VECTOR + SIZEOF_MAGIC ; Pointer to OEM label
 
-ADDR_S2_LDR                 equ 0x9000                      ; Pointer to second-stage loader
-ADDR_E820_MAP               equ 0x1000                      ; Pointer to E820 map
+INIT_STACK                  equ 0x7b00                      ; Initial value for SP
 
-E820_ENTRIES                equ 1023                        ; E820 map entries
+ADDR_S2_LDR                 equ 0x9000                      ; Pointer to second-stage loader
+
+E820_ENTRIES                equ 1024                        ; maximum number of E820 map entries
+SIZEOF_E820_ENTRY           equ 24                          ; size of a long E820 entry
+
+
+E820_DESC_ADDR              equ 0                           ; offset for address within the E820 map descriptor
+                                                            ; (location of the E820 map + descriptor relative
+                                                            ; to the end of the stage-2 loader binary)
+E820_DESC_SIZE              equ E820_DESC_ADDR + 8          ; offset for entry count within the E820 map descriptor
+E820_DESC_END               equ E820_DESC_ADDR + 16         ; offset for the contents of the E820 map
 
 SIZEOF_RDENTRY              equ 32                          ; Size of RDE
 SIZEOF_83NAME               equ 11                          ; Size of 8.3 name
@@ -58,6 +71,7 @@ LOWEST_FRAME                equ DAP_FRAME
 GUARD_SIZE                  equ 2                           ; Size of guard
 
 ALLOC_SIZE                  equ -LOWEST_FRAME + GUARD_SIZE  ; Size of allocated frame
+INIT_FRAME                  equ INIT_STACK + ALLOC_SIZE     ; Initial value for BP
 
 RDE_FIRST_CLUSTER           equ 26                          ; Offset for cluster ID 0
 
@@ -76,12 +90,27 @@ PAE_ENABLE          equ 1 << 5          ; Enable PAE in CR4
 PG_ENABLE           equ 1 << 31         ; Enable paging in CR0
 
 
-; Page hierarchy layout
-PML4T_ADDR          equ 0x11000         ; Location of PML4 table (master hierarchy)
-PDPT_ADDR           equ 0x12000         ; Location of PDP table (huge)
-PDT_ADDR            equ 0x13000         ; Location of page directory table (large)
-PT_ADDR             equ 0x14000         ; Location of page table (standard)
+; Paging hierarchy layout
+; - for starters, offset for bootstrap paging structures
+SIZEOF_PT           equ 1 << 12         ; Sets page table size to 4 kiB
 
+; - location of PML4 table (master hierarchy)
+; (offset relative to page boundary-aligned base
+; just past the E820 map)
+OFFSET_PTS          equ 0
+OFFSET_PML4         equ OFFSET_PTS
+
+; - location of PDP table (huge)
+OFFSET_PDPT         equ OFFSET_PML4 + SIZEOF_PT
+
+; - location of page directory table (large)
+OFFSET_PDT          equ OFFSET_PDPT + SIZEOF_PT
+
+; - location of page table(s) (standard)
+OFFSET_PT           equ OFFSET_PDT + SIZEOF_PT
+
+; - size of the bootstrap paging hierarchy
+SIZEOF_PTS          equ OFFSET_PT + SIZEOF_PT - OFFSET_PML4
 
 ; Page masks and flags
 PT_ADDR_MASK        equ 0xffffffffff000 ; Mask to align addresses to 4 kiB
@@ -90,14 +119,12 @@ PT_READWRITE        equ 2               ; Marks page as R/W
 PT_PAGESIZE         equ 128             ; Marks page as large/huge (if needed)
 
 SIZEOF_PAGE         equ 1 << 12         ; Sets page size to 4 kiB (normal pages)
-SIZEOF_PT           equ 1 << 12         ; Sets page table size to 4 kiB
-
-ENTRIES_PER_PT      equ 512             ; Entries per page table
-SIZEOF_PT_ENTRY     equ 8               ; Size of PT entry (64 bits)
 
 EFER_MSR            equ 0xC0000080      ; EFER MSR address
 EFER_LME            equ 0x100           ; EFER IA-32e set bit
 
+ENTRIES_PER_PT      equ 512             ; Entries per page table
+SIZEOF_PT_ENTRY     equ 8               ; Size of PT entry (64 bits)
 
 ; GDT bits
 ; - access bits

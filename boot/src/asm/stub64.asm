@@ -14,17 +14,13 @@ NULL    equ 0           ; Null pointer
 
 section .stub64
 _stub64:
-    ; Header (like, c'mon?)
-    ; 0.  (9) 64-bit near jump (e9 RR RR RR RR RR? RR? RR? RR?)
-    ; 1.  (3) zero padding (00 00 00)
-    ; 2.  (8) 64-bit offset to 'main'
-    jmp qword .start
-.pad:
-    times 12-($-$$) db 0
-.handover_offset:
-    dq main - _stub64
-.start:
-    cli                 ; Kill interrupts
+    ; Bye-bye, useless header!
+    ; See you in rebase hell!
+    xchg bx, bx
+
+    ; Until we have a usable IDT, we should
+    ; disable interupts before it's too late
+    cli
 
     ; Initialize segments
     ; - assuming ECX is preserved mid-jump,
