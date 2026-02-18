@@ -7,6 +7,8 @@ provisional, as side-effects are being discovered and
 expansions are being sketched out.
 
 ## Memory layout
+
+### Holistic layout
 The bootloader should *at the minimum* guarantee the following
 memory layout in order for further assumptions to be made:
 
@@ -21,6 +23,14 @@ memory layout in order for further assumptions to be made:
 |`0x09000`     |`0x3FFFF` / ? | Stage-2 bootloader code + E820 map + bootstrap page tables        | 220k / ?     |
 
 The exact memory layout is laid out *ad hoc* in `defs.asm`.
+
+### Stage-2 loader space
+
+| Region symbol                                        | Description                              | Size                                            |
+|:----------------------------------------------------:|:-----------------------------------------|:-----------------------------------------------:|
+|`ADDR_S2_LDR := 0x9000`                               | Stage-2 bootloader base                  |`_sizeof_s2_ldr` - provided by linker            |
+|`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr)`   | E820 memory map descriptor + entries     | min. descriptor (8 B), max. descriptor + `E820_ENTRIES` map entries|
+|`[page_structs] := align([e820_map] + 8 + SIZEOF_E820_ENTRY * [[e820_map] + 8])` | Bootstrap paging structures | min. 4096 B (PML4, PDPT, PDT, PT) |
 
 ### Lessons learnt
 - **Overlap between second-stage loader and page tables leading to high-level panics and `#DF`:**
