@@ -6,6 +6,19 @@ of the assembly part of the **magnetite_os** bootloader.
 provisional, as side-effects are being discovered and
 expansions are being sketched out.
 
+## Lessons learnt
+
+### Overlap between second-stage loader and page tables leading to high-level panics and processor faults
+As the Rust portion of `magnetite_os/boot` grew larger and more sophisticated, it ran into serious issues
+regarding memory layout. For instance, adjusting the dimensions and in-struct location of the shadow
+buffer used inside a VGA text mode helper struct ended up producing panics and triple-faults that were
+hard to reason with, at least until *file size* and *memory location* were considered. 
+
+_Significant effort was dedicated to revising the VBR and the stage-2 stubs, with particular
+focus on changing the memory layout from an **address-based static layout** to an
+**append-only dynamically-assessed** layout. These changes, along with the rationale that led
+to them, should be formally documented, so as to prevent similar outcomes._
+
 ## Memory layout
 
 ### Holistic layout
@@ -28,18 +41,9 @@ The exact memory layout is laid out *ad hoc* in `defs.asm`.
 
 | Region symbol                                        | Description                              | Size                                            |
 |:----------------------------------------------------:|:-----------------------------------------|:-----------------------------------------------:|
-|`ADDR_S2_LDR := 0x9000`                               | Stage-2 bootloader base                  |`_sizeof_s2_ldr` - provided by linker            |
+|`ADDR_S2_LDR := 0x9000`                               | Stage-2 bootloader base                  |`_sizeof_s2_ldr` (provided by linker)            |
 |`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr)`   | E820 memory map descriptor + entries     | min. descriptor (8 B), max. descriptor + `E820_ENTRIES` map entries|
 |`[page_structs] := align([e820_map] + 8 + SIZEOF_E820_ENTRY * [[e820_map] + 8])` | Bootstrap paging structures | min. 4096 B (PML4, PDPT, PDT, PT) |
-
-### Lessons learnt
-- **Overlap between second-stage loader and page tables leading to high-level panics and `#DF`:**
-As the Rust part of `magnetite_os/boot` grew larger and more sophisticated, it ran into serious issues
-regarding memory layout. For instance, adjusting the dimensions and in-struct location of the shadow
-buffer used inside a VGA text mode helper struct ended up producing panics and triple-faults that were
-hard to reason with, at least until *file size* and *memory location* were considered. _Significant
-effort was dedicated to revising the VBR and the stage-2 stubs, with particular focus on changing the
-memory layout from an **address-based static layout** to an **append-only dynamically-assessed** layout._
 
 ## `defs.asm` - constant definitions
 TODO
