@@ -8,6 +8,21 @@ expansions are being sketched out.
 
 ## Lessons learnt
 
+### Mismatch between file size and assumed memory layout leading to failed reads
+As the stage-2 loader binary `boot1.bin` grew in size, the VBR ran into issues related to
+segmentation and low-level arithmetic. For instance, the routine responsible for loading
+`boot1.bin` into memory initially assumed a flat-memory layout - even though *real mode*
+uses segmentation, and cannot handle offsets greater than 65535. Additionally, a bug was
+left undiscovered in the routine responsible for reading from the boot device until
+`boot1.bin` grew so large that it spanned more than two clusters, thus leading to
+seemingly-mysterious read failures.
+
+_A sizeable amount of effort was dedicated to revising the VBR, with particular focus on
+rigorous validation of arithmetic sub-routines, as well as a localized segmentation-first
+model for key memory operations such as file loading. These changes, alogn with the
+rationale that lead to them, should be formally documented, so as to prevent similar
+outcomes._
+
 ### Overlap between second-stage loader and page tables leading to high-level panics and processor faults
 As the Rust portion of `magnetite_os/boot` grew larger and more sophisticated, it ran into serious issues
 regarding memory layout. For instance, adjusting the dimensions and in-struct location of the shadow
@@ -38,12 +53,24 @@ memory layout in order for further assumptions to be made:
 The exact memory layout is laid out *ad hoc* in `defs.asm`.
 
 ### Stage-2 loader space
+The memory space for the stage-2 loader should be configured as follows:
 
 | Region symbol                                        | Description                              | Size                                            |
 |:----------------------------------------------------:|:-----------------------------------------|:-----------------------------------------------:|
 |`ADDR_S2_LDR := 0x9000`                               | Stage-2 bootloader base                  |`_sizeof_s2_ldr` (provided by linker)            |
 |`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr)`   | E820 memory map descriptor + entries     | min. descriptor (8 B), max. descriptor + `E820_ENTRIES` map entries|
 |`[page_structs] := align([e820_map] + 8 + SIZEOF_E820_ENTRY * [[e820_map] + 8])` | Bootstrap paging structures | min. 4096 B (PML4, PDPT, PDT, PT) |
+
+In simpler terms, the ordering should be
+
+- the stage-2 loader binary, followed by
+- the E820 map descriptor, along with E820 map entries, followed by
+- bootstrap paging structures, which may expand as necessary
+
+subject to the following address alignment requirements:
+
+- structures **should** generally be aligned to 8-byte or 16-byte boundaries
+- paging structures **must** be aligned to 4096-byte boundaries
 
 ## `defs.asm` - constant definitions
 TODO
