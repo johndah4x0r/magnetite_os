@@ -58,8 +58,8 @@ The memory space for the stage-2 loader should be configured as follows:
 | Region symbol                                            | Description                              | Size                                            |
 |:--------------------------------------------------------:|:----------------------------------------:|:-----------------------------------------------:|
 |`ADDR_S2_LDR := 0x9000`                                   | Stage-2 bootloader base                  |`_sizeof_s2_ldr` (provided by linker)            |
-|`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr, 16)`   | E820 memory map descriptor + entries     | min. descriptor (8 B), max. descriptor + `E820_ENTRIES` map entries|
-|`[page_structs] := align([e820_map] + 8 + SIZEOF_E820_ENTRY * [[e820_map] + 8], 4096)` | Bootstrap paging structures | min. 16 kiB (PML4, PDPT, PDT, PT) |
+|`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr, 16)`   | E820 memory map descriptor + entries     | min. descriptor (16 B), max. descriptor + `E820_ENTRIES` map entries|
+|`[page_structs] := align([e820_map] + 16 + SIZEOF_E820_ENTRY * [[e820_map] + 8], 4096)` | Bootstrap paging structures | min. 16 kiB (PML4, PDPT, PDT, PT) |
 
 In simpler terms, the ordering should be
 
@@ -75,7 +75,7 @@ subject to the following address alignment requirements:
 ## `defs.asm` - constant definitions
 *The exact definitions, as well as their descriptions, can be found in* `defs.asm`.
 
-### Constants
+### VBR constants
 | Constant label              | Expression / value            | Description                                                             |
 |:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------:|
 | `START_VECTOR`              | `0x7C00`                      | **VBR start vector**                                                    |
@@ -126,19 +126,61 @@ The BIOS expects the following fields to be placed at their respective offsets:
 | `DAP_LBA_MID2`              | `DAP_FRAME + 12`              | High-middle word of the target sector LBA (unused; kept at `0x0000`) |
 | `DAP_LBA_HIGH`              | `DAP_FRAME + 14`              | Highest word of the target sector LBA (unused; kept at `0x0000`)     |
 
-### Constants, continuation nr. 1
-| Constant label              | Expression / value            | Description                                                                     |
-|:---------------------------:|:-----------------------------:|:-------------------------------------------------------------------------------:|
-| `NULL`                      | `0`                           | Null pointer                                                                    |
-| `ID_EFLAGS`                 | `1 << 21`                     | `ID` bit ìn `EFLAGS` (unused; `CPUID` asserted by brute force)                  |
-| `EXT_CPUID`                 | `1 << 31`                     | Value for `EAX` to check which `CPUID` extensions are present                   |
-| `FEAT_CPUÌD`                | `1 << 31 \| 1`                | Value for `EAX` to query which processor extensions are present                 |
-| `LM_EDX_CPUID`              | `1 << 29`                     | Value of the `LM` bit in `EDX` after invoking `CPUID` with `EAX = FEAT_CPUID`   |
-| `NO_PAGING`                 | `0x7FFFFFFF`                  | Bit mask to unset `CR0.PG` and disable paging                                   |
-| `PAE_ENABLE`                | `1 << 5`                      | Value which sets `CR4.PAE` and enables Physical Address Expansion               |
-| `PG_ENABLE`                 | `1 << 31`                     | Value which sets `CR0.PG` and enables paging                                    |
+### CPU stage change constants
+| Constant label              | Expression / value            | Description                                                                         |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
+| `ID_EFLAGS`                 | `1 << 21`                     | `ID` bit ìn `EFLAGS` (unused; `CPUID` asserted by brute force)                      |
+| `EXT_CPUID`                 | `1 << 31`                     | Value for `EAX` to check which `CPUID` extensions are present                       |
+| `FEAT_CPUÌD`                | `1 << 31 \| 1`                | Value for `EAX` to query which processor extensions are present                     |
+| `LM_EDX_CPUID`              | `1 << 29`                     | Value of the `LM` bit in `EDX` after invoking `CPUID` with `EAX = FEAT_CPUID`       |
+| `NO_PAGING`                 | `(1 << 31) - 1`               | Bit mask to unset `CR0.PG` and disable paging                                       |
+| `PAE_ENABLE`                | `1 << 5`                      | Value which sets `CR4.PAE` and enables Physical Address Expansion                   |
+| `PG_ENABLE`                 | `1 << 31`                     | Value which sets `CR0.PG` and enables paging                                        |
+| `EFER_MSR`                  | `0xC0000080`                  | Address for the `IA32_EFER` model-specific-register (MSR)                           |
+| `EFER_LME`                  | `1 << 8`                      | Value which sets `IA32_EFER.LME` and enables IA32e Compatibility Mode / "long mode" |
 
-TODO
+### Paging structures
+The stage-2 loader and the CPU expect the paging structures to be laid out as follows:
+
+| Offset label                | Expression / value            | Description                                                                         |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
+| `OFFSET_PTS`, `OFFSET_PML4` | `0`                           | Offset to paging structures (starting with the PML4)                                |
+| `OFFSET_PDPT`               | `OFFSET_PML4 + SIZEOF_PT`     | Offset to a single PDPT relative to a calculated base                               |
+| `OFFSET_PDT`                | `OFFSET_PDPT + SIZEOF_PT`     | Offset to a single PDT relative to a calculted base                                 |
+| `OFFSET_PT`                 | `OFFSET_PT + SIZEOF_PT`       | Offset to a single PT relative to a calculated base                                 |
+
+The base is small page-aligned, and is determined by the location and size of the E820 map.
+
+### Page table entry values and constants
+| Constant label              | Expression / value            | Description                                                                         |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
+| `SIZEOF_PT`, `SIZEOF_PAGE`  | `1 << 12`                     | Size of a small page and a page table (4096 B)                                      |
+| `PT_ADDR_MASK`              | `(1 << 64) - (1 << 12)`       | Mask to align addresses to 4096 B                                                   |
+| `PT_PRESENT`                | `1 << 0`                      | Value to mark a page table entry as *present*                                       |
+| `PT_READWRITE`              | `1 << 1`                      | Value to mark a page table entry as *read/write*                                    |
+| `PT_PAGESIZE`               | `1 << 7`                      | Value to mark a page table entry as *large/huge*                                    |
+| `ENTRIES_PER_PT`            | `512`                         | Number of entries per page table                                                    |
+| `SIZEOF_PT_ENTRY`           | `8`                           | Size of a page table entry                                                          |
+
+### GDT selector access bits
+| Constant label              | Expression / value            | Description                                                                         |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
+| `SEG_PRESENT`               | `1 << 7`                      | Value to mark a segment as *present*                                                |
+| `SEG_NOT_SYS`               | `1 << 4`                      | Value to mark a segment as a *non-system segment*                                   |
+| `SEG_EXEC`                  | `1 << 3`                      | Value to mark a segment as *executable*                                             |
+| `SEG_RW`                    | `1 << 1`                      | Value to mark a segment as *read/write*                                             |
+
+### GDT selector flags
+| Constant label              | Expression / value            | Description                                                                         |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
+| `SEG_GRAN_4K`               | `1 << 7`                      | Value to set a segment's granularity to 4096 B                                      |
+| `SEG_SZ_32`                 | `1 << 6`                      | Value to set a segment's default parameter width to 32-bit                          |
+| `SEG_LONG_MODE`             | `1 << 5`                      | Value to mark a segment as a *long mode segment*                                    |
+
+### Uncategorized constants
+| Constant label              | Expression / value            | Description                                                                         |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
+| `NULL`                      | `0`                           | Null pointer                                                                        |
 
 ## `vbr.asm` / `vbr.bin` - custom FAT16-aware 8086-safe volume boot record
 TODO
