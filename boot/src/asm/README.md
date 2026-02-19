@@ -55,11 +55,11 @@ The exact memory layout is laid out *ad hoc* in `defs.asm`.
 ### Stage-2 loader space
 The memory space for the stage-2 loader should be configured as follows:
 
-| Region symbol                                        | Description                              | Size                                            |
-|:----------------------------------------------------:|:-----------------------------------------|:-----------------------------------------------:|
-|`ADDR_S2_LDR := 0x9000`                               | Stage-2 bootloader base                  |`_sizeof_s2_ldr` (provided by linker)            |
-|`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr)`   | E820 memory map descriptor + entries     | min. descriptor (8 B), max. descriptor + `E820_ENTRIES` map entries|
-|`[page_structs] := align([e820_map] + 8 + SIZEOF_E820_ENTRY * [[e820_map] + 8])` | Bootstrap paging structures | min. 4096 B (PML4, PDPT, PDT, PT) |
+| Region symbol                                            | Description                              | Size                                            |
+|:--------------------------------------------------------:|:----------------------------------------:|:-----------------------------------------------:|
+|`ADDR_S2_LDR := 0x9000`                                   | Stage-2 bootloader base                  |`_sizeof_s2_ldr` (provided by linker)            |
+|`[e820_map] := align(ADDR_S2_LDR + _sizeof_s2_ldr, 16)`   | E820 memory map descriptor + entries     | min. descriptor (8 B), max. descriptor + `E820_ENTRIES` map entries|
+|`[page_structs] := align([e820_map] + 8 + SIZEOF_E820_ENTRY * [[e820_map] + 8], 4096)` | Bootstrap paging structures | min. 16 kiB (PML4, PDPT, PDT, PT) |
 
 In simpler terms, the ordering should be
 
@@ -73,6 +73,71 @@ subject to the following address alignment requirements:
 - paging structures **must** be aligned to 4096-byte boundaries
 
 ## `defs.asm` - constant definitions
+*The exact definitions, as well as their descriptions, can be found in* `defs.asm`.
+
+### Constants
+| Constant label              | Expression / value            | Description                                                             |
+|:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------:|
+| `START_VECTOR`              | `0x7C00`                      | **VBR start vector**                                                    |
+| `SIZEOF_MAGIC`              | `3`                           | Size of the magic sequence `EB 3C 90`                                   |
+| `OEM_LABEL`                 | `START_VECTOR + SIZEOF_MAGIC` | Location of the DOS 4.0 EBPB in memory, starting with the OEM label.    |
+| `INIT_STACK`                | `0x7B00`                      | Initial value for the stack pointer `SP`                                |
+| `ADDR_S2_LDR`               | `0x9000`                      | **Location of the stage-2 loader in memory**                            |
+| `E820_ENTRIES`              | `1024`                        | Maximum number of E820 map entries to be queried                        |
+| `SIZEOF_E820_ENTRY`         | `24`                          | Size of a single E820 entry                                             |
+| `E820_DESC_ADDR`            | `0`                           | Offset to the address field in the E820 map descriptor                  |
+| `E820_DESC_SIZE`            | `8`                           | Offset to the size field in the E820 map descriptor                     |
+| `E820_DESC_END`             | `16`                          | Offset to the first E820 map entry (right after the descriptor)         |
+| `SIZEOF_RDENTRY`            | `32`                          | Size of a FAT16 root directory entry                                    |
+| `SIZEOF_83NAME`             | `11`                          | Size of a 8.3 filename                                                  |
+| `FRAME`                     | `-20`                         | Start of the local variables frame (relative to `INIT_FRAME`)           |
+| `DAP_FRAME`                 | `FRAME - 16`                  | Start of the DAP / boot drive reader frame                              |
+| `LOWEST_FRAME`              | `DAP_FRAME`                   | Offset for the "lowest" frame                                           |
+| `GUARD_SIZE`                | `2`                           | Number of bytes to reserve past the "lowest" frame                      |
+| `ALLOC_SIZE`                | `-LOWEST_FRAME + GUARD_SIZE`  | Stack frame size                                                        |
+| `INIT_FRAME`                | `INIT_STACK + ALLOC_SIZE`     | Initial value for the frame pointer `BP` (should be below stack bottom) |
+| `RDE_FIRST_CLUSTER`         | `26`                          | Offset for cluster ID 0 in a root directory entry                       |
+
+### Local variables frame
+| Variable name               | Field location                | Description                                                          |
+|:---------------------------:|:-----------------------------:|:--------------------------------------------------------------------:|
+| `ROOT_DIR_SECTORS`          | `FRAME + 0`                   | root directory sectors count                                         |
+| `FIRST_FAT_SECTORS_LOW`     | `FRAME + 2`                   | low word of the first FAT sector LBA                                 |
+| `FIRST_FAT_SECTORS_HIGH`    | `FRAME + 4`                   | high word of the first FAT sector LBA                                |
+| `FIRST_RD_SECTOR_LOW`       | `FRAME + 6`                   | low word of the first root directory sector LBA                      |
+| `FIRST_RD_SECTOR_HIGH`      | `FRAME + 8`                   | high word of the first root directory sector LBA                     |
+| `FIRST_DATA_SECTOR_LOW`     | `FRAME + 10`                  | low word of the first data sector LBA                                |
+| `FIRST_DATA_SECTOR_HIGH`    | `FRAME + 12`                  | high word of the first data sector LBA                               |
+| `LAST_ACCESSED_LOW`         | `FRAME + 14`                  | low word of the last-accessed sector LBA                             |
+| `LAST_ACCESSED_HIGH`        | `FRAME + 16`                  | high word of the last-accessed sector LBA                            |
+| `BOOT_DEV`                  | `FRAME + 18`                  | boot device number                                                   |
+
+### DAP / boot drive reader frame
+The BIOS expects the following fields to be placed at their respective offsets:
+
+| Variable name               | Field location                | Description                                                          |
+|:---------------------------:|:-----------------------------:|:--------------------------------------------------------------------:|
+| `DAP_SIZE`                  | `DAP_FRAME + 0`               | Size of the Disk Address Packet. Must be equal to `0x10`.            |
+| `DAP_NUM_SECTORS`           | `DAP_FRAME + 2`               | Number of sectors to request from the BIOS                           |
+| `DAP_BUF_OFFSET`            | `DAP_FRAME + 4`               | Offset part of the pointer to target buffer                          |
+| `DAP_BUF_SEGMENT`           | `DAP_FRAME + 6`               | Segment part of the pointer to target buffer                         |
+| `DAP_LBA_LOW`               | `DAP_FRAME + 8`               | Lowest word of the target sector LBA                                 |
+| `DAP_LBA_MID1`              | `DAP_FRAME + 10`              | Low-middle word of the target sector LBA                             |
+| `DAP_LBA_MID2`              | `DAP_FRAME + 12`              | High-middle word of the target sector LBA (unused; kept at `0x0000`) |
+| `DAP_LBA_HIGH`              | `DAP_FRAME + 14`              | Highest word of the target sector LBA (unused; kept at `0x0000`)     |
+
+### Constants, continuation nr. 1
+| Constant label              | Expression / value            | Description                                                                     |
+|:---------------------------:|:-----------------------------:|:-------------------------------------------------------------------------------:|
+| `NULL`                      | `0`                           | Null pointer                                                                    |
+| `ID_EFLAGS`                 | `1 << 21`                     | `ID` bit ìn `EFLAGS` (unused; `CPUID` asserted by brute force)                  |
+| `EXT_CPUID`                 | `1 << 31`                     | Value for `EAX` to check which `CPUID` extensions are present                   |
+| `FEAT_CPUÌD`                | `1 << 31 \| 1`                | Value for `EAX` to query which processor extensions are present                 |
+| `LM_EDX_CPUID`              | `1 << 29`                     | Value of the `LM` bit in `EDX` after invoking `CPUID` with `EAX = FEAT_CPUID`   |
+| `NO_PAGING`                 | `0x7FFFFFFF`                  | Bit mask to unset `CR0.PG` and disable paging                                   |
+| `PAE_ENABLE`                | `1 << 5`                      | Value which sets `CR4.PAE` and enables Physical Address Expansion               |
+| `PG_ENABLE`                 | `1 << 31`                     | Value which sets `CR0.PG` and enables paging                                    |
+
 TODO
 
 ## `vbr.asm` / `vbr.bin` - custom FAT16-aware 8086-safe volume boot record
