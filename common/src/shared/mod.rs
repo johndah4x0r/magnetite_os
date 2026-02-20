@@ -22,3 +22,27 @@ pub mod traits;
 
 // Sanitized I/O definitions
 pub mod io;
+
+/**
+    A finite set of error types
+
+    This type is functionally equivalent to [`io::ErrorPayload`], except
+    that it can be used outside of I/O contexts. The variants that this
+    type offers reflect the most common error types found in early-stage
+    `no_std` environments.
+*/
+#[derive(Debug, Copy, Clone)]
+#[non_exhaustive]
+pub enum GenericError {
+    /// Error code
+    ErrorCode(usize),
+
+    /// Error message
+    ErrorMessage(&'static str),
+
+    /// Other error payload
+    Other,
+
+    /// No payload
+    Empty,
+}

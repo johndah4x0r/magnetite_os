@@ -22,6 +22,7 @@
 */
 
 use core::fmt;
+use super::GenericError;
 
 /* Helper methods */
 
@@ -300,6 +301,17 @@ impl Error {
         E_UNINITIALIZED => Uninitialized,
         E_OTHER => Other,
         E_UNCATEGORIZED => Uncategorized,
+    }
+}
+
+impl From<Error> for GenericError {
+    fn from (value: Error) -> GenericError {
+        match value.payload() {
+            ErrorPayload::Code(c) => GenericError::ErrorCode(c),
+            ErrorPayload::Message(m) => GenericError::ErrorMessage(m),
+            ErrorPayload::Empty => GenericError::Empty,
+            _ => GenericError::Other,   
+        }
     }
 }
 
