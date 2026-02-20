@@ -35,8 +35,9 @@ focus on changing the memory layout from an **address-based static layout** to a
 to them, should be formally documented, so as to prevent similar outcomes._
 
 ## Memory layout
+The exact memory layout is laid out *ad hoc* in `defs.asm`.
 
-### Holistic layout
+### Firmware-constrained region
 The bootloader should *at the minimum* guarantee the following
 memory layout in order for further assumptions to be made:
 
@@ -46,13 +47,17 @@ memory layout in order for further assumptions to be made:
 |`0x01000`     |`0x07AFF`     | Bootstrap stack at `INIT_STACK := 0x07B00`                        | 27 392       |
 |`0x07B00`     |`0x07BFF`     | Stack underflow limit; utilized by stack frame at `INIT_FRAME`    | 256          |
 |`0x07C00`     |`0x07DFF`     | Stage-1 bootloader code; should not be mutated unless necessary   | 512          |
+
+Note that the stage-2 loader expects the bootstrap stack to be usable.
+
+### Transitional region
+| Region start | Region end   | Description                                                       | Size (IEC B) |
+|:------------:|:------------:|:-----------------------------------------------------------------:|:------------:|
 |`0x07E00`     |`0x08BFF`     | Read buffer used by `vbr.bin`                                     | 4096         |
 |`0x08E00`     |`0x08FFF`     | Buffer overflow limit / padding to nearest small-page boundary    | 512          |
-|`0x09000`     |`0x3FFFF` / ? | Stage-2 bootloader code + E820 map + bootstrap page tables        | 220k / ?     |
+|`0x09000`     |`0x3FFFF` / ? | *Loader-derived region*                                           | 220k / ?     |
 
-The exact memory layout is laid out *ad hoc* in `defs.asm`.
-
-### Stage-2 loader space
+### Loader-derived region (dynamic)
 The memory space for the stage-2 loader should be configured as follows:
 
 | Region symbol                                            | Description                              | Size                                            |
@@ -147,7 +152,7 @@ The stage-2 loader and the CPU expect the paging structures to be laid out as fo
 | `OFFSET_PTS`, `OFFSET_PML4` | `0`                           | Offset to paging structures (starting with the PML4)                                |
 | `OFFSET_PDPT`               | `OFFSET_PML4 + SIZEOF_PT`     | Offset to a single PDPT relative to a calculated base                               |
 | `OFFSET_PDT`                | `OFFSET_PDPT + SIZEOF_PT`     | Offset to a single PDT relative to a calculted base                                 |
-| `OFFSET_PT`                 | `OFFSET_PT + SIZEOF_PT`       | Offset to a single PT relative to a calculated base                                 |
+| `OFFSET_PT`                 | `OFFSET_PDT + SIZEOF_PT`      | Offset to a single PT relative to a calculated base                                 |
 
 The base is small page-aligned, and is determined by the location and size of the E820 map.
 
@@ -183,6 +188,7 @@ The base is small page-aligned, and is determined by the location and size of th
 | `NULL`                      | `0`                           | Null pointer                                                                        |
 
 ## `vbr.asm` / `vbr.bin` - custom FAT16-aware 8086-safe volume boot record
+_The VBR is, in its current state, sufficiently stable, and shall therefore be "frozen" in behavor; only patches concerning correctness fixes will be considered for future application._
 
 ### Surface-level information
 The responsibilities of the VBR are as follows:
@@ -217,6 +223,15 @@ The exact sequence of events can be found in `vbr.asm`.
 
 ### Breakdown of subroutines
 TODO
+
+(freehand: no sub-routines other than `read_bootdev` should be allowed to calculate buffer cursor position,
+not least because registers are capped to `0xFFFF`, but also because segmentation is a PITA: `addr = (segment << 4) + offset`,
+and making *all* routines calculate their own segments and offsets would kill all hopes of cramming FAT16-aware logic within
+440-something bytes)
+
+(freehand: since `compute_sectors`, `walk_rootdir`, `parse_entry` and `read_bootdev` all rely on FLAGS awareness
+and mnemonic discipline, manual validation is effectively mandatory; one misplaced `xor` can make "smart" logic
+look "dumb")
 
 ## `boot1.bin` - custom stage-2 bootloader
 TODO
