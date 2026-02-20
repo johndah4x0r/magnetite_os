@@ -5,7 +5,7 @@
 ;
 ; The task is simple (on paper): load the second-stage
 ; loader from a FAT16 volume, and run it.
-; 
+;
 ; Boot parameters are passed using
 ; a custom contract to save space.
 ;
@@ -29,7 +29,7 @@ jmp short _start
 nop
 
 ; Dummy BIOS parameter block (DOS 4.0)
-; - Used for references, skipped when overwriting 
+; - Used for references, skipped when overwriting
 ;   target MBR (or should I say, target VBR)
 ;
 ; ...doesn't stop me from decorating it, though...
@@ -364,7 +364,7 @@ read_bootdev:
 
     int 0x13                                ; Call BIOS
     test ah, ah                             ; Check return code
-    jnz panic                               ; Break on error    
+    jnz panic                               ; Break on error
     ; --- fall-through --- ;
 
 .cont:

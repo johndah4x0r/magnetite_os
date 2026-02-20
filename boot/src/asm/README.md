@@ -90,7 +90,7 @@ subject to the following address alignment requirements:
 | `E820_DESC_END`             | `16`                          | Offset to the first E820 map entry (right after the descriptor)         |
 | `SIZEOF_RDENTRY`            | `32`                          | Size of a FAT16 root directory entry                                    |
 | `SIZEOF_83NAME`             | `11`                          | Size of a 8.3 filename                                                  |
-| `FRAME`                     | `-20`                         | Start of the local variables frame (relative to `INIT_FRAME`)           |
+| `FRAME`                     | `-20`                         | Start of the global variables frame (relative to `INIT_FRAME`)          |
 | `DAP_FRAME`                 | `FRAME - 16`                  | Start of the DAP / boot drive reader frame                              |
 | `LOWEST_FRAME`              | `DAP_FRAME`                   | Offset for the "lowest" frame                                           |
 | `GUARD_SIZE`                | `2`                           | Number of bytes to reserve past the "lowest" frame                      |
@@ -98,7 +98,7 @@ subject to the following address alignment requirements:
 | `INIT_FRAME`                | `INIT_STACK + ALLOC_SIZE`     | Initial value for the frame pointer `BP` (should be below stack bottom) |
 | `RDE_FIRST_CLUSTER`         | `26`                          | Offset for cluster ID 0 in a root directory entry                       |
 
-### Local variables frame
+### Global variables frame
 | Variable name               | Field location                | Description                                                          |
 |:---------------------------:|:-----------------------------:|:--------------------------------------------------------------------:|
 | `ROOT_DIR_SECTORS`          | `FRAME + 0`                   | root directory sectors count                                         |
@@ -131,7 +131,7 @@ The BIOS expects the following fields to be placed at their respective offsets:
 |:---------------------------:|:-----------------------------:|:-----------------------------------------------------------------------------------:|
 | `ID_EFLAGS`                 | `1 << 21`                     | `ID` bit ìn `EFLAGS` (unused; `CPUID` asserted by brute force)                      |
 | `EXT_CPUID`                 | `1 << 31`                     | Value for `EAX` to check which `CPUID` extensions are present                       |
-| `FEAT_CPUÌD`                | `1 << 31 \| 1`                | Value for `EAX` to query which processor extensions are present                     |
+| `FEAT_CPUID`                | `1 << 31 \| 1`                | Value for `EAX` to query which processor extensions are present                     |
 | `LM_EDX_CPUID`              | `1 << 29`                     | Value of the `LM` bit in `EDX` after invoking `CPUID` with `EAX = FEAT_CPUID`       |
 | `NO_PAGING`                 | `(1 << 31) - 1`               | Bit mask to unset `CR0.PG` and disable paging                                       |
 | `PAE_ENABLE`                | `1 << 5`                      | Value which sets `CR4.PAE` and enables Physical Address Expansion                   |
@@ -183,6 +183,39 @@ The base is small page-aligned, and is determined by the location and size of th
 | `NULL`                      | `0`                           | Null pointer                                                                        |
 
 ## `vbr.asm` / `vbr.bin` - custom FAT16-aware 8086-safe volume boot record
+
+### Surface-level information
+The responsibilities of the VBR are as follows:
+
+1. Stabilize CPU state
+    - zero out segment registers to enforce a flat-memory model
+    - initialize stack at `INIT_STACK`
+    - initialize stack frame at `INIT_FRAME`
+2. Stabilize boot drive state
+    - store boot drive number in the variable `BOOT_DEV`
+    - check whether the BIOS exposes the **Enhanced Disk Device** interface
+3. Compute file system geometry
+    - locate the first FAT sector,
+    - the first root directory sector, and
+    - the first data sector
+4. Locate stage-2 loader executable (`boot1.bin`)
+    - obtain a sample of the root directory, then
+    - check whether an entry in the sample contains the 8.3 filename `BOOT1   BIN`, then
+    - obtain more samples until the file is found, or until the root directory has been exhausted
+5. Load stage-2 loader executable into memory
+    - obtain the ID for the first cluster in the chain, then
+    - calculate the location of the corresponding data sector, then
+    - read the data sector to `ADDR_S2_LDR` using a sliding write head, then
+    - calculate where the next cluster ID is located in the FAT, then
+    - obtain a sample from FAT if necessary, then
+    - follow the cluster chain, repeating the preceiding steps until end-of-chain (cluster ID g.t. `0xFFEF`) is encountered
+6. Transfer control to stage-2 loader
+    - copy boot device number from the variable `BOOT_DEV` into a known register, then
+    - perform an intra-segment jump to `ADDR_S2_LDR`
+
+The exact sequence of events can be found in `vbr.asm`.
+
+### Breakdown of subroutines
 TODO
 
 ## `boot1.bin` - custom stage-2 bootloader
