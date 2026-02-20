@@ -5,9 +5,11 @@
 use core::hint;
 use core::panic::PanicInfo;
 use core::slice::from_raw_parts;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 // - internal definitions
 extern crate common;
+use common::shared::GenericError;
 use common::shared::io::Write;
 use common::shared::structs::array_like::ArrayLike;
 use common::shared::structs::spin_lock::Mutex;
@@ -23,39 +25,58 @@ static MSG_DOUBLE_PANIC: &'static str =
     "(2/2) bootloader panicked: (info corrupted or too risky to acquire)\n";
 
 // Keep track of panic invocations to prevent re-entry
-static mut PANIC_FLAG: usize = 0;
+static PANIC_FLAG: AtomicUsize = AtomicUsize::new(0);
 
 // Instantiate VGA console with default values
 static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(unsafe { VgaConsole::defaults() });
 
 // Initial routine
-//  - call it 'main' for the sake of brevity
+//  - call it '_start' for the sake of brevity
 // TODO
 #[inline(never)]
 #[unsafe(no_mangle)]
-pub extern "C" fn main(
-    _bios_pb: &'static BiosPB,
-    _bootdev: u64,
-    _e820_map: &'static ArrayLike<'static, LongE820>,
+pub extern "C" fn _start(
+    bios_pb: &'static BiosPB,
+    bootdev: u64,
+    e820_map_desc: &'static ArrayLike<'static, LongE820>,
 ) -> ! {
+    // Attempt to validate the E820 map descriptor
+    // TODO: validate it *properly*
+    if let Ok(e820_map) = e820_map_desc.try_into() {
+        main(bios_pb, bootdev, e820_map).unwrap();
+    } else {
+        panic!("received an invalid E820 map descriptor");
+    }
+
+    // Halt the system
+    freeze();
+}
+
+// Inner main routine
+// - error types are non-exhaustive, but most of
+//   them are of the type `io::Error`, which
+//   implements `Into<GenericError>`
+// - in general, the error types must implement
+//   `Into<GenericError>`
+fn main(_bios_bp: &BiosPB, _bootdev: u64, _e820_map: &[LongE820]) -> Result<(), GenericError> {
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
 
     // Clear screen
-    handle.clear().unwrap();
+    handle.clear()?;
 
     // Initialize the shadow buffer
     handle.init();
 
     // Write to screen
-    writeln!(&mut handle, "Hello, world!").unwrap();
-    writeln!(&mut handle, "This is a test!").unwrap();
-    writeln!(&mut handle, "The quick brown fox jumps over the lazy dog").unwrap();
+    writeln!(&mut handle, "Hello, world!")?;
+    writeln!(&mut handle, "This is a test!")?;
+    writeln!(&mut handle, "The quick brown fox jumps over the lazy dog")?;
 
     // Commit changes
-    handle.flush().unwrap();
+    handle.flush()?;
 
-    loop {}
+    Ok(())
 }
 
 #[panic_handler]
@@ -73,25 +94,19 @@ fn panic(info: &PanicInfo<'_>) -> ! {
 // `PANIC_FLAG`, then incremenitng it
 #[inline(always)]
 fn panic_fetch_add() -> usize {
-    unsafe {
-        // - increment flag
-        PANIC_FLAG += 1;
-
-        // return pre-increment flag
-        PANIC_FLAG - 1
-    }
+    PANIC_FLAG.fetch_add(1, Ordering::SeqCst)
 }
 
 // Routine for first panic invocation
 // TODO: decide whether to assume control over the console
 #[inline(always)]
 fn single_panic(info: &PanicInfo<'_>) -> ! {
-    // 1. forcibly unlock the console
+    // 1. forcibly unlock the console, if necessary
     unsafe {
         VGA_CONSOLE.unlock();
     }
 
-    // 2. write to the console, first by arbitrage, then by force
+    // 2. write to the console, first by arbitration, then by force
     let f = |c: &mut VgaConsole| {
         c.unset_shadowed();
         writeln!(c, "(1/2) bootloader panicked: {:?}", info)
@@ -142,7 +157,11 @@ fn double_panic(_info: &PanicInfo<'_>) -> ! {
     // 2. write the double-panic message
     // from the start of the text buffer
     let msg_b = MSG_DOUBLE_PANIC.as_bytes();
-    for i in 0..msg_b.len() {
+
+    // - be paranoid, and truncate the message
+    let n = msg_b.len().min(buf.len());
+
+    for i in 0..n {
         let c = console::DEF_ATTR | (msg_b[i] as u16);
         buf[i].store(c)
     }

@@ -8,7 +8,7 @@
 ; independent of initial position.
 
 global _stub64          ; Global export of _stub64
-extern main             ; Import of Rust 'main' routine
+extern _start           ; Import of Rust '_start' routine
 
 NULL    equ 0           ; Null pointer
 
@@ -66,7 +66,7 @@ _stub64:
     ; no need to change segments, and we'd
     ; otherwise run the risk of feeding RIP 
     ; with blatantly incorrect values
-    call main
+    call _start
     ; --- fall-through (unlikely) --- ;
 
 .spin:
