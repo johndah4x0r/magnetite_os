@@ -230,9 +230,9 @@ parse_entry:
     ; TODO: maybe cheat using 32-bit registers
 
     ; CONTEXT 0
-    ; - DI is inhereted from CONTEXT 1
+    ; - BX is inhereted from CONTEXT 1
     ; At this point, we should have the pointer
-    ; to the relevant directory entry in DI
+    ; to the relevant directory entry in BX
 
     ; Load cluster ID 0
     mov ax, [bx + RDE_FIRST_CLUSTER]        ; Load low word, as the high word
@@ -251,7 +251,7 @@ parse_entry:
     sub cx, ax                              ; Subtract AX from CX
     jc .done                                ; If it underflows, we're done here
 
-    push ax                                 ; Save AX
+    push ax                                 ; Save AX (cluster ID)
 
     ; Step 2
     ; Copy current cluster to target
@@ -273,7 +273,7 @@ parse_entry:
     jmp panic
 .clear:
     xchg bx, bx
-    pop ax                                  ; Restore AX
+    pop ax                                  ; Restore AX (cluster ID)
 
     ; Step 3
     ; Calculate offset for next cluster ID

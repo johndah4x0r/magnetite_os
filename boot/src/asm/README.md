@@ -286,6 +286,46 @@ The implementation of this sub-routine is somewhat interesting, in that
 - it uses `times 2 movsw` to copy the locals `FIRST_RD_SECTOR_LOW` and `FIRST_RD_SECTOR_HIGH` to `DAP_LBA_LOW` and `DAP_LBA_MID1`, and
 - it reads the root directory incrementally, rather than in bulk
 
+Otherwise, it is quite unremarkable, as it only has to
+
+1. read a slice of the root directory into the global read buffer `read_buf`
+2. locate an entry containing `boot1.bin` within the slice
+3. replenish the global read buffer until `boot1.bin` is located, or until the root directory is exhausted
+
+One does have to be aware of which values for `CX` and `DX` belong to what "context":
+
+- context 0 represents the "outer loop", which runs until the root directory is exhausted
+- context 1 represents the "inner loop", which is simply a `rep cmpsb`
+- `DX` keeps track of how many buffered entries context 1 has consumed
+
+If the entry containing `boot1.bin` is found, the pointer to the entry can be found in `0x0000:[BX]`.
+
+(TODO)
+
+#### `parse_entry` - follow cluster chain and load file to memory
+This sub-routine relies on `walk_root_dir` storing the pointer to the entry containing
+`boot1.bin` in the register `BX`, as it loads the ID for the first cluster in the chain,
+which is stored in `0x0000:[BX + RDE_FIRST_CLUSTER]`.
+
+The internal behavior of this sub-routine can be summarized as follows:
+
+1. obtain the ID for the first cluster in the chain
+    - initialize `last_cluster_id := 0x0000:[BX + RDE_FIRST_CLUSTER]`
+2. calculate the location of the corresponding data sector
+    - `data_sector := first_data_sector + sectors_per_cluster * last_cluster_id`
+3. read the data sector to `ADDR_S2_LDR` using a sliding write head
+    - the DAP source LBA is set to `data_sector`
+    - the DAP buffer pointer is allowed to advance automatically, starting from `ADDR_S2_LDR`
+4. calculate where the next cluster ID is located in the FAT
+    - `next_cluster_group_lba := 2 * last_cluster_id / bytes_per_sector + first_fat_sector`
+    - `next_cluster_id_offset := (2 * last_cluster_id) % bytes_per_sector`
+5. obtain a sample from FAT if `last_accessed_lba != next_cluster_group_lba`
+    - save old read pointer
+    - read from `next_cluster_group_lba` to the global read buffer `read_buf`
+    - set `last_cluster_id := 0x0000:[read_buf + next_cluster_id_offset]`
+6. follow the cluster chain, repeating the preceiding steps until end-of-chain (cluster ID g.t. `0xFFEF`) is encountered
+    - continue the process until `last_cluster_id >= 0xFFF0`
+
 (TODO)
 
 (freehand: no sub-routines other than `read_bootdev` should be allowed to calculate buffer cursor position,
