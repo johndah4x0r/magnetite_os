@@ -4,21 +4,67 @@
 
 /// Short (20 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
-#[repr(C, packed)]
+// - this can be represented normally, as we
+//   handle integer reconstruction ourselves
+#[derive(Debug, Copy, Clone)]
+#[repr(C, align(4))]
 pub struct ShortE820 {
-    pub base: u64,
-    pub size: u64,
-    pub area_type: u32,
+    _base_low: u32,
+    _base_high: u32,
+    _size_low: u32,
+    _size_high: u32,
+    _area_type: u32,
+}
+
+impl ShortE820 {
+    /// Return region base
+    pub fn base(&self) -> u64 {
+        ((self._base_high as u64) << 32) | (self._base_low as u64)
+    }
+
+    /// Return region size
+    pub fn size(&self) -> u64 {
+        ((self._size_high as u64) << 32) | (self._size_low as u64)
+    }
+
+    /// Return area type
+    pub fn area_type(&self) -> u32 {
+        self._area_type
+    }
 }
 
 /// Long (24 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
-#[repr(C, packed)]
+// - this can be represented normally
+//   (as in, without language-level packing)
+#[derive(Debug, Copy, Clone)]
+#[repr(C, align(8))]
 pub struct LongE820 {
-    pub base: u64,
-    pub size: u64,
-    pub area_type: u32,
-    pub acpi_attr: u32,
+    _base: u64,
+    _size: u64,
+    _area_type_attr: u64,
+}
+
+impl LongE820 {
+    /// Return region base
+    pub fn base(&self) -> u64 {
+        self._base
+    }
+
+    /// Return region size
+    pub fn size(&self) -> u64 {
+        self._size
+    }
+
+    /// Return area type
+    pub fn area_type(&self) -> u32 {
+        self._area_type_attr as u32
+    }
+
+    /// Return ACPI attributes
+    pub fn acpi_attr(&self) -> u32 {
+        (self._area_type_attr >> 32) as u32
+    }
 }
 
 /// BIOS parameter block structure

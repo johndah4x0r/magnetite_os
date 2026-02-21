@@ -180,12 +180,15 @@ e820_scan:
     ; Save current value of ES
     mov cx, es
 
+    ; Save current value of ESI
+    push esi
+
     ; Perform segmentation-friendly
     ; pointer advance
     xor dx, dx
-    mov bx, di                              ; Set BX = DI
+    mov si, di                              ; Set SI = DI
     mov ax, es                              ; Set AX = ES
-    add bx, 4                               ; Advance BX by 4 bytes
+    add si, 4                               ; Advance SI by 4 bytes
     adc dx, 0                               ; Preserve carry
     jc .stop                                ; Stop on overflow
     shl dx, 12                              ; Calculate segment equivalent
@@ -193,22 +196,25 @@ e820_scan:
     jc .stop                                ; Stop on overflow
     mov es, ax                              ; Update ES
 
-    mov word es:[bx], 0x0001                ; Force valid ACPI 3.x entry
+    mov word es:[si], 0x0001                ; Force valid ACPI 3.x entry
 
     ; Perform segmentation-friendly
     ; pointer advance
     xor dx, dx
-    add bx, 2                               ; Advance BX by 2 bytes
+    add si, 2                               ; Advance SI by 2 bytes
     adc dx, 0                               ; Preserve carry
     jc .stop                                ; Stop on overflow
     shl dx, 12                              ; Calculate segment equivalent
     adc ax, dx                              ; Increment segment
     jc .stop                                ; Stop on overflow
     mov es, ax
-    mov word es:[bx], 0x0000
+    mov word es:[si], 0x0000
 
     ; Restore old value of ES
     mov es, cx
+
+    ; Restore ESI
+    pop esi
 
     ; Prepare call to E820
     ; - we assume that ES:DI has been
@@ -217,6 +223,7 @@ e820_scan:
     mov eax, 0x0000e820                     ; Set call number
     mov edx, 0x534d4150                     ; String: 'SMAP' (big-endian)
     mov ecx, 24                             ; Ask for 24-byte entries
+    clc                                     ; Clear residual CF
     int 0x15                                ; Call BIOS
     jc .verify                              ; We're done already...
     cmp eax, 0x534d4150                     ; String: 'SMAP' (big-endian)

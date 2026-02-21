@@ -58,7 +58,7 @@ pub extern "C" fn _start(
 //   implements `Into<GenericError>`
 // - in general, the error types must implement
 //   `Into<GenericError>`
-fn main(_bios_bp: &BiosPB, _bootdev: u64, _e820_map: &[LongE820]) -> Result<(), GenericError> {
+fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), GenericError> {
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
 
@@ -71,7 +71,24 @@ fn main(_bios_bp: &BiosPB, _bootdev: u64, _e820_map: &[LongE820]) -> Result<(), 
     // Write to screen
     writeln!(&mut handle, "Hello, world!")?;
     writeln!(&mut handle, "This is a test!")?;
-    writeln!(&mut handle, "The quick brown fox jumps over the lazy dog")?;
+    writeln!(&mut handle, "The quick brown fox jumps over the lazy dog\n")?;
+
+    // Commit changes
+    handle.flush()?;
+
+    // Print boot device number
+    writeln!(&mut handle, "Boot device identifier: 0x{:X}", bootdev)?;
+
+    // Iterate over E820 map entries
+    // - we trust that `e820_map` points to real entries
+    for entry in e820_map {
+        // Print debug representation of each entry
+        writeln!(
+            &mut handle,
+            "E820 entry (base/size/type/attr.) 0x{:X} / 0x{:X} / 0x{:X} / 0x{:X}",
+            entry.base(), entry.size(), entry.area_type(), entry.acpi_attr()
+        )?;
+    }
 
     // Commit changes
     handle.flush()?;
