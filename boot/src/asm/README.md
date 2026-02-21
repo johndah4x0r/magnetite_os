@@ -222,7 +222,71 @@ The responsibilities of the VBR are as follows:
 The exact sequence of events can be found in `vbr.asm`.
 
 ### Breakdown of subroutines
-TODO
+Subroutines that require *due care* will be broken down in their own subsections. Those that
+appear to be unremarkable will instead be briefly explained in the table below.
+
+| Symbol name           | Description                           | Notes                                                         |
+|:---------------------:|:-------------------------------------:|:-------------------------------------------------------------:|
+| `_start`              | Executable code start                 | Sets all segment registers to zero                            |
+| `check_ext`           | Checks presence of BIOS EDD services  | `ah := 0x41`, `bx := 0x55aa`, expects `CF = 0`                |
+| `panic`               | Prints panic message, then halts      | The panic message is simply `ERR` due to space constraints    |
+
+#### `compute_sectors` - compute file system geometry
+The implementation of this sub-routine is *more or less* "standard" when it comes
+to inferring the geometries of FAT16-formatted volumes.
+
+From a purely mathematical perspective, one has
+
+1. `root_dir_sectors := ceil(32 * root_dir_entries / bytes_per_sector)`
+2. `first_fat_sector := reserved_sectors + hidden_sectors`
+3. `first_root_dir_sector := first_fat_sector + fat_count * sectors_per_fat`
+4. `first_data_sector := first_root_dir_sector + root_dir_sectors`
+
+where the non-derived quantities
+
+- `root_dir_entries`
+- `bytes_per_sector`
+- `reserved_sectors`
+- `hidden_sectors`
+- `fat_count`
+- `sectors_per_fat`
+
+are obtained from the BIOS parameter block. The implementation details are *less trivial* than
+the mathematical details, as the expressions assume
+
+- wide (32-bit minimum) integer, and
+- concurrent arithmetic is possible (which it isn't in standard 8086 assembly)
+
+For instance, consider how `root_dir_sectors` is calculated:
+```nasm
+; Calculate number of root
+; directory sectors
+; FIXME: This may crash in Bochs
+xor dx, dx                              ; Zero DX
+mov ax, [RootDirEntries]                ; Store number of root directory entries
+mov bx, 32                              ; Explicitly multiply by 32
+mul bx                                  ; (here)
+
+mov bx, [BytesPerSector]                ; Store sector size
+lea cx, [bx - 1]                        ; Decrement and store in CX
+add ax, cx                              ; Add into AX to over-count
+adc dx, 0                               ; Propagate carry
+
+div bx                                  ; Divide DX:AX by sector size
+mov [bp + ROOT_DIR_SECTORS], ax         ; Store quotient and ignore remainder
+```
+It's not as simple as "calling `ceil()`", as one has to manually emulate `ceil()`, all while baby-sitting `DX:AX` and `FLAGS`.
+Notice how the example above uses `add / adc`, which isn't problematic on its own, but is an attractive vector for "heisenbugs"
+if stateful operations are placed between `add` and `adc`.
+
+(TODO)
+
+#### `walk_root_dir` - walk root directory
+The implementation of this sub-routine is somewhat interesting, in that
+- it uses `times 2 movsw` to copy the locals `FIRST_RD_SECTOR_LOW` and `FIRST_RD_SECTOR_HIGH` to `DAP_LBA_LOW` and `DAP_LBA_MID1`, and
+- it reads the root directory incrementally, rather than in bulk
+
+(TODO)
 
 (freehand: no sub-routines other than `read_bootdev` should be allowed to calculate buffer cursor position,
 not least because registers are capped to `0xFFFF`, but also because segmentation is a PITA: `addr = (segment << 4) + offset`,
