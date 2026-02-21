@@ -312,7 +312,7 @@ The internal behavior of this sub-routine can be summarized as follows:
 1. obtain the ID for the first cluster in the chain
     - initialize `last_cluster_id := 0x0000:[BX + RDE_FIRST_CLUSTER]`
 2. calculate the location of the corresponding data sector
-    - `data_sector := first_data_sector + sectors_per_cluster * last_cluster_id`
+    - `data_sector := first_data_sector + sectors_per_cluster * (last_cluster_id - 2)`
 3. read the data sector to `ADDR_S2_LDR` using a sliding write head
     - the DAP source LBA is set to `data_sector`
     - the DAP buffer pointer is allowed to advance automatically, starting from `0x0000:ADDR_S2_LDR`
@@ -359,6 +359,56 @@ responsible for *caching a cluster group* and *keeping track of which write head
 (TODO)
 
 #### `read_bootdev` - read sectors from boot drive
+As this sub-routine is *essential* and *highly stateful*, its source code will be included in full:
+```nasm
+; Read from boot drive
+; - this one may be a little hard to read
+; - BP = 0x7b00, DS = ES = CS = 0
+; Accepts:
+; - CX: number of sectors to read
+; - dap.lba: 32-bit LBA (auto-increment)
+; - dap.buf_offset: target buffer offset (auto-increment)
+; - dap.buf_segment: target buffer segment (auto-increment)
+read_bootdev:
+    pusha
+    mov word [bp + DAP_NUM_SECTORS], 1      ; Load just 1 sector per iteration
+.read:
+    ; Read from disk
+    mov dl, [bp + BOOT_DEV]                 ; Load boot drive number into LD
+    mov ah, 0x42                            ; Extended read
+    lea si, [bp + DAP_FRAME]                ; Point SI to DAP (ES = 0)
+
+    int 0x13                                ; Call BIOS
+    test ah, ah                             ; Check return code
+    jnz panic                               ; Break on error
+    ; --- fall-through --- ;
+
+.cont:
+    ; Move write pointer, accounting
+    ; for segmentation
+    ; - dirty trick
+    mov ax, [BytesPerSector]                ; Load sector size
+    xor dx, dx                              ; Zero DX (affects CF?)
+    add [bp + DAP_BUF_OFFSET], ax           ; Add it to buffer offset
+    adc dx, 0                               ; Propagate carry
+    shl dx, 12                              ; Turn it into a proper segment
+    add [bp + DAP_BUF_SEGMENT], dx          ; Add it to buffer segment
+    jc panic                                ; Give up on overflow
+
+    ; Increment source LBA
+    ; - cap usable LBA to 32 bits
+    add word [bp + DAP_LBA_LOW], 1          ; Increment low word
+    adc word [bp + DAP_LBA_MID_1], 0        ; Propagate carry to high word
+    jc panic                                ; Give up on overflow
+
+    loop .read                              ; Read one more sector (decrement CX)
+    ; --- fall-through --- ;
+.done:
+    popa
+    ret
+
+```
+
 (TODO)
 
 (freehand: no sub-routines other than `read_bootdev` should be allowed to calculate buffer cursor position,
