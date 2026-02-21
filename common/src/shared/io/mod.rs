@@ -21,8 +21,8 @@
     it is feasible and appropriate.
 */
 
-use core::fmt;
 use super::GenericError;
+use core::fmt;
 
 /* Helper methods */
 
@@ -305,12 +305,12 @@ impl Error {
 }
 
 impl From<Error> for GenericError {
-    fn from (value: Error) -> GenericError {
+    fn from(value: Error) -> GenericError {
         match value.payload() {
             ErrorPayload::Code(c) => GenericError::ErrorCode(c),
             ErrorPayload::Message(m) => GenericError::ErrorMessage(m),
             ErrorPayload::Empty => GenericError::Empty,
-            _ => GenericError::Other,   
+            _ => GenericError::Other,
         }
     }
 }

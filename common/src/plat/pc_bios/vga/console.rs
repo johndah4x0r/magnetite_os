@@ -436,7 +436,7 @@ impl Write for VgaConsole<'_> {
         let m = n.min(self.cols * self.rows);
 
         // Choose whether to truncate the buffer
-        let b_ref = if self.trunc { &buf[n-m..] } else { &buf[..] };
+        let b_ref = if self.trunc { &buf[n - m..] } else { &buf[..] };
 
         // Obtain the tail of the buffer (so as to
         // avoid unnecessary copying), then write to
