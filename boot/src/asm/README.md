@@ -315,17 +315,50 @@ The internal behavior of this sub-routine can be summarized as follows:
     - `data_sector := first_data_sector + sectors_per_cluster * last_cluster_id`
 3. read the data sector to `ADDR_S2_LDR` using a sliding write head
     - the DAP source LBA is set to `data_sector`
-    - the DAP buffer pointer is allowed to advance automatically, starting from `ADDR_S2_LDR`
+    - the DAP buffer pointer is allowed to advance automatically, starting from `0x0000:ADDR_S2_LDR`
+    - **the sub-routine `read_bootdev` should advance the DAP buffer segment and offset internally**
 4. calculate where the next cluster ID is located in the FAT
-    - `next_cluster_group_lba := 2 * last_cluster_id / bytes_per_sector + first_fat_sector`
+    - `next_cluster_group_lba := floor(2 * last_cluster_id / bytes_per_sector) + first_fat_sector`
     - `next_cluster_id_offset := (2 * last_cluster_id) % bytes_per_sector`
 5. obtain a sample from FAT if `last_accessed_lba != next_cluster_group_lba`
-    - save old read pointer
+    - save old write head pointer
     - read from `next_cluster_group_lba` to the global read buffer `read_buf`
     - set `last_cluster_id := 0x0000:[read_buf + next_cluster_id_offset]`
+    - set `last_accessed_lba := next_cluster_group_lba`
+    - restore old write head pointer
 6. follow the cluster chain, repeating the preceiding steps until end-of-chain (cluster ID g.t. `0xFFEF`) is encountered
     - continue the process until `last_cluster_id >= 0xFFF0`
 
+The only truly "precarious" portion within `parse_entry` is `parse_entry.replenish`, which is
+responsible for *caching a cluster group* and *keeping track of which write head pointer is active*:
+```nasm
+.replenish:
+    ; Save new LBA
+    mov [bp + LAST_ACCESSED_LOW], ax        ; Save low word of new LBA
+    mov [bp + LAST_ACCESSED_HIGH], dx       ; Save high word of new LBA
+
+    mov [bp + DAP_LBA_LOW], ax              ; Point DAP to new LBA
+    mov [bp + DAP_LBA_MID_1], dx            ; (load high word here)
+
+    mov cx, 1                               ; Read just 1 sector
+
+    ; Point DAP offset to read buffer
+    xor si, si                              ; Zero segment (later stores old segment)
+    mov di, read_buf                        ; Read buffer (later stores old offset)
+    xchg [bp + DAP_BUF_OFFSET], di          ; Exchange new offset with  old offset
+    xchg [bp + DAP_BUF_SEGMENT], si         ; Exchange new segment with old segment
+
+    ; Read from boot device
+    call read_bootdev
+
+    ; Restore old pointer
+    mov [bp + DAP_BUF_OFFSET], di
+    mov [bp + DAP_BUF_SEGMENT], si
+```
+
+(TODO)
+
+#### `read_bootdev` - read sectors from boot drive
 (TODO)
 
 (freehand: no sub-routines other than `read_bootdev` should be allowed to calculate buffer cursor position,
