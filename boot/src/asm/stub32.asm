@@ -326,18 +326,20 @@ gdt64:
 
 ; Null-terminated messages
 msgs:
-    .panic16    db "Loader panicked while in 16-bit mode; CS:IP = ", 0
-    .panic      db "Loader panicked while in 32-bit PM. Reason: ", 0
-    .reason     db "Reason: ", 0
-    .unsup      db "CPU older than i486, or otherwise unsupported", 0
-    .no_lm      db "CPU does not support x86-64 long mode", 0
-    .got_id     db "CPU vendor string: ", 0
-    .caught_ud  db "Caught #UD at CS:IP = ", 0
-    .e820       db "Failed to generate memory layout map", 0
-    .overflow   db "Arithmetic overflow", 0
-    .reset      db "Replace boot device, and press <Enter> to reset", 0
+    .panic16        db "Loader panicked while in 16-bit mode; CS:IP = ", 0
+    .panic          db "Loader panicked while in 32-bit PM. Reason: ", 0
+    .reason         db "Reason: ", 0
+    .unsup          db "CPU older than i486, or otherwise unsupported", 0
+    .no_lm          db "CPU does not support x86-64 long mode", 0
+    .got_id         db "CPU vendor string: ", 0
+    .vbe_mode       db "VBE mode detected: ", 0
+    .caught_ud      db "Caught #UD at CS:IP = ", 0
+    .e820           db "Failed to generate memory layout map", 0
+    .mem_too_small  db "Insufficient memory detected (less than 256 kiB)", 0
+    .overflow       db "Arithmetic overflow", 0
+    .reset          db "Replace boot device, and press <Enter> to reset", 0
 
-    .crlf       db 0x0a, 0x0d, 0
+    .crlf           db 0x0a, 0x0d, 0
 
 ; Nibble characters
 numstr:
@@ -354,6 +356,63 @@ signature:
     .high       dd 0
     .null       db 0
     .pad        align 8
+
+; VBE info block
+vbe_info_block:
+    .signature              db "VBE2"
+    .version                dw 0x0200
+    .oem_string_offset      dw 0
+    .oem_string_segment     dw 0
+    .capabilities           dd 0
+    .video_mode_offset      dw 0
+    .video_mode_segment     dw 0
+    .memory_size            dw 0
+    .revision               dw 0
+    .vendor_offset          dw 0
+    .vendor_segment         dw 0
+    .product_name_offset    dw 0
+    .product_name_segment   dw 0
+    .product_rev_offset     dw 0
+    .product_rev_segment    dw 0
+    ._reserved              times 222 db 0
+    .oem_data               times 256 db 0
+
+; VBE mode info block
+vbe_mode_info_block:
+    .attrs                  dw 0
+    .window_a               db 0
+    .window_b               db 0
+    .granularity            dw 0
+    .window_size            dw 0
+    .segment_a              dw 0
+    .segment_b              dw 0
+    .win_func_offset        dw 0
+    .win_func_segment       dw 0
+    .pitch                  dw 0
+    .width                  dw 0
+    .height                 dw 0
+    ._w_char                db 0
+    ._y_char                db 0
+    .planes                 db 0
+    .bpp                    db 0
+    .banks                  db 0
+    .memory_model           db 0
+    .bank_size              db 0
+    .image_pages            db 0
+    ._reserved_0            db 0
+    .red_mask               db 0
+    .red_position           db 0
+    .green_mask             db 0
+    .green_position         db 0
+    .blue_mask              db 0
+    .blue_position          db 0
+    .reserved_mask          db 0
+    .reserved_position      db 0
+    .direct_color_attrs     db 0
+    .framebuffer            dd 0
+    .off_screen_mem_offset  dd 0
+    .off_screen_mem_size    dw 0
+    ._reserved_1            times 206 db 0
 
 ; Pointer to BPB (32-bit pointer extended to 64-bit)
 oem_label:

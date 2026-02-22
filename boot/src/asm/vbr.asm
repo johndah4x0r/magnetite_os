@@ -88,9 +88,6 @@ _start:
 
     mov word [bp + DAP_SIZE], 0x0010        ; Set DAP size
 
-    ; Set flags
-    sti                                     ; Enable interrupts
-
     ; Store device number
     mov [bp + BOOT_DEV], dl
 
@@ -394,7 +391,6 @@ read_bootdev:
 ; Print error message to screen, then reset
 panic:
     xchg bx, bx                             ; Breakpoint in Bochs
-    sti                                     ; Enable interrupts 
 
     ; Write error string to screen
     mov si, errmsg                          ; Pointer to boilerplate message

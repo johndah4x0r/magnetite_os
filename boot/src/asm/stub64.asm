@@ -7,6 +7,9 @@
 ; the secondary (tertiary?) stage to be
 ; independent of initial position.
 
+; Include definitions
+%include "boot/src/asm/defs.asm"
+
 global _stub64          ; Global export of _stub64
 extern _start           ; Import of Rust '_start' routine
 
@@ -35,7 +38,7 @@ _stub64:
     ; Reset stack
     ; - this is the only occasion where
     ; we'd be using static references
-    mov rsp, 0x7b00
+    mov rsp, INIT_STACK
     mov rbp, rsp
 
     ; Dereference RDI and RSI to unwrap the

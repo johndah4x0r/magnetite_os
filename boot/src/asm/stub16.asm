@@ -44,7 +44,7 @@ _stub16:
     ; - set a 256 B buffer between bottom of stack and
     ; boot sector start
     mov ss, bx
-    mov sp, 0x7b00
+    mov sp, INIT_STACK
 
     ; Enforce flat addressing
     jmp 0:.vec
@@ -74,12 +74,12 @@ cpu_check:
     and bh, 0x70                            ; Mask top nibble
     and dh, 0x70                            ; Mask top nibble
     cmp bh, dh                              ; Check whether the top bits have changed
-    jne .illegal                            ; Continue if change is detected
+    jne .is_newer                           ; Continue if change is detected
     ; --- fall-through --- ;
 
     mov si, msgs.unsup
     call panic
-.illegal:
+.is_newer:
     ; Load custom interrupt vector
     ; - only makes sense in CPUs newer
     ; than the 8086
@@ -116,23 +116,79 @@ cpu_check:
     push msgs.got_id                        ; Preamble
     call print
 .done:
-    ; - calculate `_base_s2_end` indirectly
-    lea eax, _stub16
-    add eax, [_stub16.binsize]
+    xchg bx, bx                             ; Breakpoint
 
-    ; Check for 16-byte alignment
+; Set video mode
+set_video_mode:
+    pushfd                                  ; Preserve flags
+
+    ; Obtain information about the VBIOS
+    push es                                 ; Preserve ES
+    lea di, [vbe_info_block]                ; Point DE to VBE info block
+    mov ax, 0x4f00
+    clc                                     ; Clear CF
+    int 0x10                                ; Call BIOS
+    pop es                                  ; Restore ES
+
+    cmp ax, 0x004f                          ; Check whether the call was a success
+    jne .default                            ; If not, we're done here
+
+    mov eax, [vbe_info_block.signature]     ; Obtain signature
+    cmp eax, 0x41534556                     ; String: "VESA" (little-endian)
+
+    ; Point DS:SI to the video modes array
+    mov dx, [vbe_info_block.video_mode_segment]
+    mov ds, dx
+    mov si, [vbe_info_block.video_mode_offset]
+
+    cld                                     ; Clear DF
+    xor ax, ax                              ; Zero AX
+.top:
+    lodsw                                   ; Load one word from the array
+    cmp ax, 0xFFFF                          ; Check if we're at the end of the array
+    je .more                                ; If we are, break the loop
+
+    ; Process provided mode
+    ; TODO: do something useful
+    push si                                 ; Preserve SI
+    xor dx, dx                              ; Zero DX
+    call stringify_num                      ; Stringify 0000:AX
+
+    mov bp, sp                              ; Store pre-push SP
+    push msgs.crlf                          ; Print newline *last*
+    push numstr                             ; Print stringified number
+    push msgs.vbe_mode                      ; Print prelude
+    call print
+
+    pop si                                  ; Restore SI
+    jmp .top                                ; Restart loop
+.more:
+    ; -- TODO -- ;
+    xchg bx, bx                             ; Breakpoint
+.default:
+    push es                                 ; Preserve ES
+    mov ax, 0x0003                          ; Set video mode to 0x03 (VGA text mode)
+    clc                                     ; Clear CF
+    int 0x10                                ; Call BIOS
+    pop es                                  ; Restore ES
+.done:
+    popfd                                   ; Restore flags
+    xchg bx, bx                             ; Breakpoint
+
+; Scan for memory using E820
+e820_scan:
+    ; Calculate `_base_s2_end` indirectly
+    lea eax, _stub16                        ; Obtain start of binary
+    add eax, [_stub16.binsize]              ; Add it with binary size
+
+    ; Align to nearest 16-byte page
     test ax, 0x000f                         ; Check the lowest nibble (16-byte "page")
     jz .aligned                             ; Skip alignment if already aligned
     and ax, 0xfff0                          ; Discard lowest nibble
     add ax, 0x0010                          ; Increment nibble (basically apply `ceil(ax)`)
 .aligned:
     mov [e820_map.low], eax                 ; store it as the location for the E820 map
-    sti                                     ; Restore interrupts
-
-; Scan for memory using E820
-e820_scan:
-    xchg bx, bx                             ; Breakpoint
-
+.check_lma:
     ; Perform LMA check (wiki.osdev.org)
     clc                                     ; Clear carry flag
     xor ax, ax                              ; Zero AX
@@ -141,12 +197,12 @@ e820_scan:
                                             ; size cannot be assessed
 
     cmp ax, 256                             ; Make sure we have at least 
-                                            ; 256 kB of continuous memory
+                                            ; 256 kiB of continuous memory
 
     jge .cont                               ; Proceed if true
     ; --- fall-through --- ;
-.stop:
-    mov si, msgs.e820                       ; Point SI to reason message
+.mem_too_small:
+    mov si, msgs.mem_too_small              ; Point SI to reason message
     call panic                              ; Call panic routine
 .cont:
     ; Store map at `[e820_map.low] + E820_DESC_END`
@@ -188,7 +244,7 @@ e820_scan:
     xor dx, dx
     mov si, di                              ; Set SI = DI
     mov ax, es                              ; Set AX = ES
-    add si, 4                               ; Advance SI by 4 bytes
+    add si, 20                              ; Advance SI by 20 bytes
     adc dx, 0                               ; Preserve carry
     jc .stop                                ; Stop on overflow
     shl dx, 12                              ; Calculate segment equivalent
@@ -247,7 +303,11 @@ e820_scan:
     ; --- fall-through --- ;
 .verify:
     test esi, esi                           ; Check if we're at the first invocation
-    jz .stop                                ; Panic if error occured on the first try
+    jnz .end                                ; Proceed if not
+    ; --- fall-through --- ;
+.stop:
+    mov si, msgs.e820                       ; Point SI to reason message
+    call panic                              ; Call panic routine
 .end:
     xchg bx, bx
 
@@ -265,13 +325,14 @@ e820_scan:
     push esi
     mov esi, eax
 
+    ; Divide 0:EAX by 16 to obtain segment and offset
+    xor edx, edx                            ; Zero EDX
+    mov ecx, 16                             ; Divide 0:EAX by 16
+    div ecx                                 ; (here)
+    ; (ignore high words of EAX and EDX)
 
-    xor edx, edx
-    mov ecx, 16
-    div ecx
-
-    mov es, ax
-    mov di, dx
+    mov es, ax                              ; Set ES to quotient (segment)
+    mov di, dx                              ; Set DI to remainder (offset)
 
     lea ebx, [esi + E820_DESC_END]          ; Calculate array base
     pop esi
@@ -391,7 +452,7 @@ not_supported:
 
 ; Print message pointed by stack arguments
 ; - takes BP (pre-push SP)
-; - clobbers AX, CX, DX
+; - clobbers AX, CX, DX, SI (very important!)
 print:
     pop dx                                  ; Pop return IP
     mov cx, bp                              ; Calculate entry count
@@ -409,7 +470,6 @@ print:
     ; but it has to be if we don't want
     ; to affect FLAGS set by the caller
     pushf                                   ; Save FLAGS
-    sti                                     ; Enable interrupts
     int 0x10                                ; Call BIOS
     popf                                    ; Restore FLAGS
     jmp .inner                              ; Resume loop
@@ -423,6 +483,15 @@ print:
 stringify_num:
     pusha                                   ; Preserve GPRs
     pushf                                   ; Preserve FLAGS
+
+    ; Preserve segment registers
+    push ds
+    push es
+
+    xor bx, bx                              ; Zero BX
+    mov ds, bx                              ; Zero DS
+    mov es, bx                              ; Zero ES
+
     mov bx, ax                              ; Stringify AX
     mov di, numstr.low                      ; Point to low string
     call .conv
@@ -446,6 +515,10 @@ stringify_num:
     loop .top                               ; Repeat loop (decrement CX)
     ret
 .done:
+    ; Restore segment register
+    pop es
+    pop ds
+
     popf                                    ; Restore FLAGS
     popa                                    ; Restore GPRs
     ret

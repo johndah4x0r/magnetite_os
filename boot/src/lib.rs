@@ -53,7 +53,7 @@ pub extern "C" fn _start(
 
     writeln!(
         &mut handle,
-        " W: We somehow escaped `main()`... In future revisions, this will be considered an error."
+        "\n W: We somehow escaped `main()`... In future revisions, this will be considered an error."
     )
     .unwrap();
 
@@ -86,15 +86,17 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), Ge
     handle.flush()?;
 
     // Print boot device number
-    writeln!(&mut handle, "Boot device identifier: 0x{:0>2X}", bootdev)?;
+    writeln!(&mut handle, "Boot device identifier: 0x{:0>2x}\n", bootdev)?;
 
     // Iterate over E820 map entries
     // - we trust that `e820_map` points to real entries
+    writeln!(&mut handle, "E820 entries (base, size, type, ACPI attributes):")?;
+
     for entry in e820_map {
         // Print debug representation of each entry
         writeln!(
             &mut handle,
-            "E820 entry (base/size/type/attr.)\n\t0x{:0>16X}\t0x{:0>16X}\t0x{:0>8X}\t0x{:0>8X}",
+            " >  0x{:0>16x}\t0x{:0>16x}\t0x{:0>8x}\t0x{:0>8x}",
             entry.base(),
             entry.size(),
             entry.area_type(),
