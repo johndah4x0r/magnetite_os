@@ -45,6 +45,9 @@ pub const MAX_SHADOW_COLS: usize = 160;
 /// Maximum shadow buffer row count (wosrt-case)
 pub const MAX_SHADOW_ROWS: usize = 50;
 
+/// Tabulation size
+pub const SIZE_TABULATOR: usize = 4;
+
 /**
     VGA console wrapper type
 
@@ -87,6 +90,7 @@ pub struct VgaConsole<'a> {
     attr: u16,
     trunc: bool,
     buffered: bool,
+    escaped: bool,
     shadow: Option<RingBuf<Array<u16, MAX_SHADOW_COLS>, MAX_SHADOW_ROWS>>,
     _marker: PhantomData<&'a VolatileCell<u16>>,
 }
@@ -121,6 +125,7 @@ impl VgaConsole<'_> {
             attr: DEF_ATTR,
             trunc: true,
             buffered: false,
+            escaped: false,
             shadow: None,
             _marker: PhantomData,
         }
@@ -348,6 +353,67 @@ impl VgaConsole<'_> {
         self.x = 0;
     }
 
+    // Internal: advance cursor to the nearest
+    // multiple of `SIZE_TABULATOR`
+    #[inline(always)]
+    fn tabulate(&mut self) {
+        // 1. calculate how many cells to skip
+        let n = if self.x % SIZE_TABULATOR > 0 {
+            SIZE_TABULATOR - (self.x % SIZE_TABULATOR)
+        } else {
+            SIZE_TABULATOR
+        };
+
+        // 2. write spaces to pad
+        for _ in 0..n {
+            self.write_char(0x20);
+        }
+    }
+
+    // Internal: handle special character sequences, if any
+    // - Returns `Ok(Some(()))` if a special character is detected,
+    //   or if the current character sequence is so far valid
+    // - Returns `Ok(None)` if no special character is detected,
+    //   or if the last character sequence has been accepted
+    // - Returns `Err(u8)` if an invalid character in the current
+    //   character sequence is detected
+    // TODO: (try not to make the state machine too complex)
+    #[inline(always)]
+    fn handle_special(&mut self, chr: u8) -> Result<Option<()>, u8> {
+        // Handle escape sequences if we're currently in one
+        if self.escaped {
+            // Propagate result
+            return self.handle_esc_seq(chr);
+        }
+
+        // Otherwise, process special characters individually
+        match chr {
+            b'\n' => self.new_line(),
+            b'\r' => {
+                self.x = 0;
+            }
+            b'\t' => self.tabulate(),
+            _ => return Ok(None),
+        }
+
+        Ok(Some(()))
+    }
+
+    // Internal: handle escape sequences specifically, if any
+    // - Returns `Ok(Some(()))` if the current escape sequence
+    //   is so far valid
+    // - Returns `Ok(None)` if no escape sequence is detected,
+    //   or if the last escape sequence has been accepted
+    // - Returns `Err(u8)` if an invalid character in the current
+    //   escape sequence is detected
+    // TODO: (try not to make the state machine too complex)
+    #[inline(always)]
+    fn handle_esc_seq(&mut self, _chr: u8) -> Result<Option<()>, u8> {
+        // TODO
+        self.escaped = false;
+        Ok(Some(()))
+    }
+
     // Internal: write character to the current page,
     // manipulating console state whenever special
     // characters are encountered
@@ -358,16 +424,12 @@ impl VgaConsole<'_> {
     #[inline(always)]
     fn write_char(&mut self, chr: u8) {
         // - parse special characters
-        match chr {
-            b'\n' => {
-                self.new_line();
+        match self.handle_special(chr) {
+            Ok(Some(())) => {
                 return;
             }
-            b'\r' => {
-                self.x = 0;
-                return;
-            }
-            _ => {}
+            Ok(None) => { /* no-op */ }
+            Err(_) => { /* TODO */ }
         }
 
         // - apply attributes to character, then

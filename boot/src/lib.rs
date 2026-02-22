@@ -48,6 +48,15 @@ pub extern "C" fn _start(
         panic!("received an invalid E820 map descriptor");
     }
 
+    let mut handle = VGA_CONSOLE.lock();
+    handle.unset_shadowed();
+
+    writeln!(
+        &mut handle,
+        " W: We somehow escaped `main()`... In future revisions, this will be considered an error."
+    )
+    .unwrap();
+
     // Halt the system
     freeze();
 }
@@ -77,7 +86,7 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), Ge
     handle.flush()?;
 
     // Print boot device number
-    writeln!(&mut handle, "Boot device identifier: 0x{:X}", bootdev)?;
+    writeln!(&mut handle, "Boot device identifier: 0x{:0>2X}", bootdev)?;
 
     // Iterate over E820 map entries
     // - we trust that `e820_map` points to real entries
@@ -85,8 +94,11 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), Ge
         // Print debug representation of each entry
         writeln!(
             &mut handle,
-            "E820 entry (base/size/type/attr.) 0x{:X} / 0x{:X} / 0x{:X} / 0x{:X}",
-            entry.base(), entry.size(), entry.area_type(), entry.acpi_attr()
+            "E820 entry (base/size/type/attr.)\n\t0x{:0>16X}\t0x{:0>16X}\t0x{:0>8X}\t0x{:0>8X}",
+            entry.base(),
+            entry.size(),
+            entry.area_type(),
+            entry.acpi_attr()
         )?;
     }
 
