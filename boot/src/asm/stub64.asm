@@ -26,14 +26,14 @@ _stub64:
     cli
 
     ; Initialize segments
-    ; - assuming ECX is preserved mid-jump,
+    ; - assuming EAX is preserved mid-jump,
     ;   we should be able to see the data
     ;   segment number in ECX
-    mov ds, cx
-    mov es, cx
-    mov fs, cx
-    mov gs, cx
-    mov ss, cx
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
 
     ; Reset stack
     ; - this is the only occasion where
@@ -51,13 +51,14 @@ _stub64:
     ;        into boot drive number
     ; - RDX: absolute pointer to E820 map pointer,
     ;        into E820 map pointer
-    ; - (RCX: zero-extended data segment number)
+    ; - (RCX: absolute pointer to screen info struct)
 
     ; - limit access to 32-bit space
     mov rax, 0xFFFFFFFF
     and rdi, rax
     and rsi, rax
     and rdx, rax
+    and rcx, rax
 
     mov rdi, [rdi]
     mov rsi, [rsi]

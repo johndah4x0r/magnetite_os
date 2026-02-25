@@ -23,7 +23,7 @@ mod allocator;
 use allocator::BumpAllocator;
 
 // - BIOS-specific structures
-use common::plat::pc_bios::structs::{BiosPB, LongE820};
+use common::plat::pc_bios::structs::{BiosPB, LongE820, ScreenInfo};
 use common::plat::pc_bios::vga::console;
 use console::VgaConsole;
 
@@ -51,11 +51,12 @@ pub extern "C" fn _start(
     bios_pb: &'static BiosPB,
     bootdev: u64,
     e820_map_desc: &'static ArrayLike<'static, LongE820>,
+    screen_info: &'static ScreenInfo,
 ) -> ! {
     // Attempt to validate the E820 map descriptor
     // TODO: validate it *properly*
     if let Ok(e820_map) = e820_map_desc.try_into() {
-        main(bios_pb, bootdev, e820_map).unwrap();
+        main(bios_pb, bootdev, e820_map, screen_info).unwrap();
     } else {
         panic!("received an invalid E820 map descriptor");
     }
@@ -83,6 +84,7 @@ fn main(
     _bios_bp: &BiosPB,
     bootdev: u64,
     e820_map: &'static [LongE820],
+    screen_info: &'static ScreenInfo,
 ) -> Result<(), GenericError> {
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
@@ -124,6 +126,32 @@ fn main(
 
     // Commit changes
     handle.flush()?;
+
+    // Print screen info
+    writeln!(&mut handle, "*** Screen information ***")?;
+    writeln!(
+        &mut handle,
+        " >  Mode:\t\t\t\t {:0>3x}h",
+        screen_info.mode()
+    )?;
+    writeln!(
+        &mut handle,
+        " >  Bytes per pixel:\t {}",
+        screen_info.bytes_per_pixel()
+    )?;
+    writeln!(
+        &mut handle,
+        " >  Pixels:\t\t\t\t {} x {}",
+        screen_info.width(),
+        screen_info.height()
+    )?;
+    writeln!(&mut handle, " >  Pitch:\t\t\t\t {}", screen_info.pitch())?;
+    writeln!(
+        &mut handle,
+        " >  Cells:\t\t\t\t {} x {}",
+        screen_info.cells_x(),
+        screen_info.cells_y()
+    )?;
 
     // Print boot device number
     writeln!(

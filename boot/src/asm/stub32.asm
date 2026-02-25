@@ -212,12 +212,13 @@ enable_lm:
     lea edi, [oem_label]        ; Point EDI to OEM label pointer
     lea esi, [bootdev]          ; Point ESI to boot drive number pointer
     lea edx, [e820_map]         ; Point EDX to E820 map pointer
-
-    ; Load data segment number to CX
+    lea ecx, [screen_info]      ; Point ECX to screen info
+    
+    ; Load data segment number to AX
     ; - very important to NOT modify
     ;   pre-handover
-    xor ecx, ecx
-    mov cx, gdt64.data
+    xor eax, eax
+    mov ax, gdt64.data
 
     ; Load 64-bit GDT and perform far jump
     ; - for now, use identity mapping

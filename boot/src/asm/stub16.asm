@@ -299,11 +299,10 @@ set_video_mode:
     je .done                                ; Leave on success
     jmp .top                                ; Repeat process on failure
 .default:
-    xor ax, ax
-    mov [.mode], ax
+    mov word [.mode], 3                     ; Set mode to 0x03
 
-    mov [screen_info.cells_x], 80           ; Set horizontal cell count to 80
-    mov [screen_info.cells_y], 25           ; Set vertical cell count to 25
+    mov word [screen_info.cells_x], 80      ; Set horizontal cell count to 80
+    mov word [screen_info.cells_y], 25      ; Set vertical cell count to 25
 
     push es                                 ; Preserve ES
     mov ax, 0x0003                          ; Set video mode to 0x03 (VGA text mode)
