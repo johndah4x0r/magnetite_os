@@ -25,10 +25,16 @@ _stub16:
     ; 0a. (3) 16-bit near jump (e9 RR RR)
     ; 0b. (1) byte extension (90)
     ; 1.  (4) 32-bit size of stage-2 loader
+    ; 2.  (4) 32-bit size of BSS region
+    ; 3.  (4) 32-bit address to end of stage-2 loader space
     jmp word .start
     nop
 .binsize:
     dd _sizeof_s2_ldr                       ; (size provided by linker)
+.bss_size:
+    dd _sizeof_bss                          ; (size provided by linker)
+.region_end:
+    dd 0                                    ; (address calculated at runtime)
 .start:
     cli                                     ; FA - Kill interrupts
     xchg bx, bx                             ; 87 DB - Bochs breakpoint
@@ -118,6 +124,55 @@ cpu_check:
 .done:
     xchg bx, bx                             ; Breakpoint
 
+; Initialize BSS
+init_bss:
+    push es                                 ; Save ES
+    lea eax, [_stub16]                      ; Obtain start of stage-2 loader space
+    mov ecx, [_stub16.binsize]              ; Obtain size of loader binary
+    add eax, ecx                            ; Calculate start of BSS
+
+    ; Calculate end of stage-2 loader space
+    mov edx, eax                            ; Copy EAX (start of BSS) to EDX
+    add edx, [_stub16.bss_size]             ; Increment start of BSS by BSS size 
+    mov [_stub16.region_end], edx           ; Store it as end of stage-2 loader space
+
+    ; Calculate segment:offset representation
+    ; of the address in EAX
+    mov ebx, 16                             ; Set EBX = 16
+    xor edx, edx                            ; Zero EDX
+    div ebx                                 ; Divide 0:EAX by EBX = 16
+    mov es, ax                              ; Set ES = AX (segment)
+    mov di, dx                              ; Set DI = DX (offset)
+.top:
+    ; Do not perform any more initialization if
+    ; the BSS size is equal to zero
+    test ecx, ecx
+    jz .done
+
+    xor eax, eax                            ; Zero EAX
+    test ecx, 0x0003                        ; Check whether ECX is a multiple of 4
+    jz .copy_quad                           ; If it is, copy four bytes 
+    ; --- fall-through --- ;
+
+    mov byte es:[di], al                    ; Copy a single byte
+    dec ecx                                 ; Decrement ECX by one
+    add di, 1                               ; Increment DI by 1
+    jc .recalc                              ; Recalculate ES:DI on overflow
+.copy_quad:
+    mov dword es:[di], eax                  ; Copy four bytes
+    sub ecx, 4                              ; Decrement ECX by four
+    add di, 4                               ; Increment DI by 1
+    jnc .top                                ; Go back to top of loop if CF = 0
+.recalc:
+    ; Try to change ES "atomically"
+    ; TODO: maybe handle CF after `add bx, 0x1000`?
+    mov bx, es                              ; Copy ES into BX
+    add bx, 0x1000                          ; Increment BX = ES by 4096
+    mov es, bx                              ; Copy new BX into ES
+    jmp .top                                ; Go back to top of loop
+.done:
+    pop es                                  ; Restore ES
+ 
 ; Set video mode
 set_video_mode:
     pushfd                                  ; Preserve flags
@@ -177,12 +232,9 @@ set_video_mode:
 
 ; Scan for memory using E820
 e820_scan:
-    ; Calculate `_base_s2_end` indirectly
-    lea eax, _stub16                        ; Obtain start of binary
-    add eax, [_stub16.binsize]              ; Add it with binary size
+    mov eax, [_stub16.region_end]           ; Obtain end of stage-2 loader space
 
-    ; Add a mandatory 16-byte guard band, then align to nearest 16 bytes
-    add eax, 16                             ; Add mandatory guard band
+    ; Align to nearest 16 bytes
     test ax, 0x000f                         ; Check the lowest nibble
     jz .aligned                             ; Skip alignment if already aligned
     and ax, 0xfff0                          ; Discard lowest nibble

@@ -17,21 +17,19 @@ SECTIONS {
         *(.text .text.*)
     }
 
-    . = ALIGN(16);
-
     /* Data-like */
-    .boot64.data : SUBALIGN(1) {
-        . = ALIGN(16);
+    .boot64.data : SUBALIGN(16) {
         *(.rodata .rodata.*)
-
-        . = ALIGN(16);
         *(.data .data.*)
     }
 
-    . = ALIGN(16);
-    .boot64.bss : SUBALIGN(1) {
+    /* Zero-initialized regions */
+    _bss_start = .;
+    .boot64.bss : SUBALIGN(16) {
+        *(.bss.allocator)
         *(.bss .bss.*)
     }
 
     . = ALIGN(16);
+    _bss_end = .;
 }

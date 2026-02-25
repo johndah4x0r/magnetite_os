@@ -24,7 +24,7 @@ fn round_addr(base: usize, align: usize) -> usize {
 // - decide whether we need concurrency guarantees (we probably don't)
 // TODO: finish prototype
 // FIXME: generalize, so that we aren't using x86-isms
-#[repr(C)]
+#[repr(C, align(4096))]
 pub struct BumpAllocator<T: Into<ShortE820> + Copy + 'static> {
     _mem_layout: UnsafeCell<Option<&'static [T]>>,
     _base: UnsafeCell<usize>,

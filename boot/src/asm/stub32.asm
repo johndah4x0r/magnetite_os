@@ -18,6 +18,9 @@
 extern _stub64                              ; Wrapped 64-bit code label
 extern _base_s2_end                         ; End of the stage-2 loader (used as a base)
 extern _sizeof_s2_ldr                       ; Stage-2 loader binary size
+extern _bss_start                           ; Start of BSS section
+extern _sizeof_bss                          ; Size of BSS section in byte 
+extern _pad_bss                             ; Size of padding between loader binary and BSS
 
 ; Include 16-bit stub
 %include "boot/src/asm/stub16.asm"

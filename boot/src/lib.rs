@@ -32,16 +32,15 @@ static MSG_DOUBLE_PANIC: &'static str =
     "(2/2) **bootloader panicked** (info corrupted or too risky to acquire)";
 
 // Keep track of panic invocations to prevent re-entry
-#[unsafe(link_section = ".data.panic_flag")]
 static PANIC_FLAG: AtomicUsize = AtomicUsize::new(0);
-
-// Instantiate VGA console with default values
-static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(unsafe { VgaConsole::defaults() });
 
 // Instatiate allocator
 #[global_allocator]
 #[unsafe(link_section = ".bss.allocator")]
 static ALLOCATOR: BumpAllocator<LongE820> = BumpAllocator::new();
+
+// Instantiate VGA console with default values
+static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(unsafe { VgaConsole::defaults() });
 
 // Initial routine
 //  - call it '_start' for the sake of brevity
@@ -80,7 +79,11 @@ pub extern "C" fn _start(
 //   implements `Into<GenericError>`
 // - in general, the error types must implement
 //   `Into<GenericError>`
-fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &'static [LongE820]) -> Result<(), GenericError> {
+fn main(
+    _bios_bp: &BiosPB,
+    bootdev: u64,
+    e820_map: &'static [LongE820],
+) -> Result<(), GenericError> {
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
 
@@ -95,27 +98,21 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &'static [LongE820]) -> Resul
         &mut handle,
         "*** Welcome to magnetite_os, revision 2026-02-25 ***\n"
     )?;
-    writeln!(&mut handle, "(Indian-head test pattern)")?;
+
     writeln!(
         &mut handle,
-        "Double-panic message location: {:?}",
+        "Double-panic message: '{}' @ {:?}",
+        MSG_DOUBLE_PANIC,
         &MSG_DOUBLE_PANIC as *const _
     )?;
+
     writeln!(
         &mut handle,
-        "Double-panic message content: '{}'",
-        MSG_DOUBLE_PANIC
-    )?;
-    writeln!(
-        &mut handle,
-        "Panic flag location: {:?}",
+        "Panic flag: '{:0>16x}' @ {:?}",
+        PANIC_FLAG.load(Ordering::SeqCst),
         &PANIC_FLAG as *const _
     )?;
-    writeln!(
-        &mut handle,
-        "Panic flag value: {:0>16x}",
-        PANIC_FLAG.load(Ordering::SeqCst)
-    )?;
+
     writeln!(
         &mut handle,
         "Console wrapper location: {:?}",
@@ -123,7 +120,6 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &'static [LongE820]) -> Resul
     )?;
 
     let handle_p = &*handle as *const _;
-
     writeln!(&mut handle, "Console backend location: {:?}", handle_p)?;
 
     // Commit changes
@@ -168,8 +164,22 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &'static [LongE820]) -> Resul
     ALLOCATOR.init(e820_map, 0)?;
 
     // Dump allocator state
+    writeln!(
+        &mut handle,
+        " I: Allocator location: {:?}",
+        &ALLOCATOR as *const _
+    );
     writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
-    writeln!(&mut handle, "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}", *ALLOCATOR.base(), *ALLOCATOR.head(), *ALLOCATOR.remaining())?;
+    writeln!(
+        &mut handle,
+        "\t0x{:0>16x}\t0x{:0>16x}\t0x{:0>16x}",
+        *ALLOCATOR.base(),
+        *ALLOCATOR.head(),
+        *ALLOCATOR.remaining()
+    )?;
+    handle.flush()?;
+
+    freeze();
 
     // Instantiate vector and loop from it
     let v: Vec<usize> = vec![1, 2, 3, 5, 8, 13, 21, 36];
@@ -180,7 +190,13 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &'static [LongE820]) -> Resul
 
     // Dump allocator state again
     writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
-    writeln!(&mut handle, "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}", *ALLOCATOR.base(), *ALLOCATOR.head(), *ALLOCATOR.remaining())?;
+    writeln!(
+        &mut handle,
+        "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}",
+        *ALLOCATOR.base(),
+        *ALLOCATOR.head(),
+        *ALLOCATOR.remaining()
+    )?;
 
     handle.flush()?;
 
