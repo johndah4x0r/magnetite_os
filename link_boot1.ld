@@ -25,13 +25,18 @@ SECTIONS {
             second-class citizen
         */
         . = ALIGN(16);
-        *(.boot64.text .boot64.data)
+        *(.boot64.text)
 
-        /* End of the stage-2 loader */
         . = ALIGN(16);
-        _base_s2_end = .;
+        *(.boot64.data)
 
-        /* Size of stage-2 loader (in bytes) */
-        _sizeof_s2_ldr = _base_s2_end - _addr_s2_ldr;
+        . = ALIGN(4096);
+        *(.boot64.bss)
     }
+
+    /* End of the stage-2 loader */
+    _base_s2_end = .;
+
+    /* Size of stage-2 loader (in bytes) */
+    _sizeof_s2_ldr = _base_s2_end - _addr_s2_ldr;
 }

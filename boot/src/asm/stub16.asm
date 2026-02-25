@@ -181,12 +181,27 @@ e820_scan:
     lea eax, _stub16                        ; Obtain start of binary
     add eax, [_stub16.binsize]              ; Add it with binary size
 
-    ; Align to nearest 16-byte page
-    test ax, 0x000f                         ; Check the lowest nibble (16-byte "page")
+    ; Add a mandatory 16-byte guard band, then align to nearest 16 bytes
+    add eax, 16                             ; Add mandatory guard band
+    test ax, 0x000f                         ; Check the lowest nibble
     jz .aligned                             ; Skip alignment if already aligned
     and ax, 0xfff0                          ; Discard lowest nibble
     add ax, 0x0010                          ; Increment nibble (basically apply `ceil(ax)`)
 .aligned:
+    ; Print the location of the
+    ; E820 map descriptor
+    push eax                                ; Save EAX
+    mov edx, eax                            ; Copy EAX to EDX
+    shr edx, 16                             ; Set DX to the high 16 bits of EAX
+    call stringify_num                      ; Stringify DX:AX
+
+    mov bp, sp                              ; Save pre-push stack pointer
+    push msgs.crlf
+    push numstr
+    push msgs.map_start
+    call print                              ; Print composed message
+
+    pop eax                                 ; Restore EAX
     mov [e820_map.low], eax                 ; store it as the location for the E820 map
 .check_lma:
     ; Perform LMA check (wiki.osdev.org)

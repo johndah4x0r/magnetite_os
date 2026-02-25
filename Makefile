@@ -20,7 +20,7 @@ KERN_RS_GLOB := kern-*.o
 BOOT64_LDFLAGS := -m elf_x86_64 -T link_boot64.ld -r --gc-sections
 BOOT1_LDFLAGS := -m elf_x86_64 -T link_boot1.ld --oformat=binary
 
-BOOT_RS_CARGOFLAGS := --release -Zbuild-std=core,compiler_builtins -Zjson-target-spec
+BOOT_RS_CARGOFLAGS := --release -Zbuild-std=core,compiler_builtins,alloc -Zjson-target-spec
 BOOT_RS_RUSTCFLAGS := -C panic=abort -C opt-level=3
 
 all: $(BUILD_DIR) $(BUILD_DIR)/vbr.bin $(BUILD_DIR)/boot1.bin

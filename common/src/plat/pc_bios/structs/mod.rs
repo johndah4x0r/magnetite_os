@@ -35,6 +35,22 @@ impl ShortE820 {
     }
 }
 
+impl From<LongE820> for ShortE820 {
+    fn from(value: LongE820) -> ShortE820 {
+        let base: u64 = value.base();
+        let size: u64 = value.size();
+        let area_type: u32 = value.area_type();
+
+        ShortE820 {
+            _base_low: base as u32,
+            _base_high: (base >> 32) as u32,
+            _size_low: size as u32,
+            _size_high: (size >> 32) as u32,
+            _area_type: area_type,
+        }
+    }
+}
+
 /// Long (24 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
 // - this can be represented normally

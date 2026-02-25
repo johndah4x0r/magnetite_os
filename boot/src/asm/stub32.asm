@@ -333,6 +333,7 @@ msgs:
     .no_lm          db "CPU does not support x86-64 long mode", 0
     .got_id         db "CPU vendor string: ", 0
     .vbe_mode       db "VBE mode detected: ", 0
+    .map_start      db "E820 map descriptor location: ", 0
     .caught_ud      db "Caught #UD at CS:IP = ", 0
     .e820           db "Failed to generate memory layout map", 0
     .mem_too_small  db "Insufficient memory detected (less than 256 kiB)", 0

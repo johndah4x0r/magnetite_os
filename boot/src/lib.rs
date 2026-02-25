@@ -4,8 +4,12 @@
 // Definition uses
 use core::hint;
 use core::panic::PanicInfo;
-use core::slice::from_raw_parts;
+use core::slice::{from_raw_parts, from_raw_parts_mut};
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+#[macro_use]
+extern crate alloc;
+use alloc::vec::Vec;
 
 // - internal definitions
 extern crate common;
@@ -15,6 +19,9 @@ use common::shared::structs::array_like::ArrayLike;
 use common::shared::structs::spin_lock::Mutex;
 use common::shared::structs::volatile::VolatileCell;
 
+mod allocator;
+use allocator::BumpAllocator;
+
 // - BIOS-specific structures
 use common::plat::pc_bios::structs::{BiosPB, LongE820};
 use common::plat::pc_bios::vga::console;
@@ -22,13 +29,19 @@ use console::VgaConsole;
 
 // Double-panic message
 static MSG_DOUBLE_PANIC: &'static str =
-    "(2/2) bootloader panicked: (info corrupted or too risky to acquire)\n";
+    "(2/2) **bootloader panicked** (info corrupted or too risky to acquire)";
 
 // Keep track of panic invocations to prevent re-entry
+#[unsafe(link_section = ".data.panic_flag")]
 static PANIC_FLAG: AtomicUsize = AtomicUsize::new(0);
 
 // Instantiate VGA console with default values
 static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(unsafe { VgaConsole::defaults() });
+
+// Instatiate allocator
+#[global_allocator]
+#[unsafe(link_section = ".bss.allocator")]
+static ALLOCATOR: BumpAllocator<LongE820> = BumpAllocator::new();
 
 // Initial routine
 //  - call it '_start' for the sake of brevity
@@ -53,7 +66,7 @@ pub extern "C" fn _start(
 
     writeln!(
         &mut handle,
-        "\n W: We somehow escaped `main()`... In future revisions, this will be considered an error."
+        "\n W: We somehow escaped `main()`...\n\tIn future revisions, this will be considered an error."
     )
     .unwrap();
 
@@ -67,7 +80,7 @@ pub extern "C" fn _start(
 //   implements `Into<GenericError>`
 // - in general, the error types must implement
 //   `Into<GenericError>`
-fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), GenericError> {
+fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &'static [LongE820]) -> Result<(), GenericError> {
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
 
@@ -78,19 +91,57 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), Ge
     handle.init();
 
     // Write to screen
-    writeln!(&mut handle, "Hello, world!")?;
-    writeln!(&mut handle, "This is a test!")?;
-    writeln!(&mut handle, "The quick brown fox jumps over the lazy dog\n")?;
+    writeln!(
+        &mut handle,
+        "*** Welcome to magnetite_os, revision 2026-02-25 ***\n"
+    )?;
+    writeln!(&mut handle, "(Indian-head test pattern)")?;
+    writeln!(
+        &mut handle,
+        "Double-panic message location: {:?}",
+        &MSG_DOUBLE_PANIC as *const _
+    )?;
+    writeln!(
+        &mut handle,
+        "Double-panic message content: '{}'",
+        MSG_DOUBLE_PANIC
+    )?;
+    writeln!(
+        &mut handle,
+        "Panic flag location: {:?}",
+        &PANIC_FLAG as *const _
+    )?;
+    writeln!(
+        &mut handle,
+        "Panic flag value: {:0>16x}",
+        PANIC_FLAG.load(Ordering::SeqCst)
+    )?;
+    writeln!(
+        &mut handle,
+        "Console wrapper location: {:?}",
+        &VGA_CONSOLE as *const _
+    )?;
+
+    let handle_p = &*handle as *const _;
+
+    writeln!(&mut handle, "Console backend location: {:?}", handle_p)?;
 
     // Commit changes
     handle.flush()?;
 
     // Print boot device number
-    writeln!(&mut handle, "Boot device identifier: 0x{:0>2x}\n", bootdev)?;
+    writeln!(
+        &mut handle,
+        "\nBoot device identifier: 0x{:0>2x}\n",
+        bootdev
+    )?;
 
-    // Iterate over E820 map entries
+    // Iterate over E820 map entries, then show them
     // - we trust that `e820_map` points to real entries
-    writeln!(&mut handle, "E820 entries (base, size, type, ACPI attributes):")?;
+    writeln!(
+        &mut handle,
+        "I: E820 entries (base, size, type, ACPI attributes):"
+    )?;
 
     for entry in e820_map {
         // Print debug representation of each entry
@@ -104,7 +155,33 @@ fn main(_bios_bp: &BiosPB, bootdev: u64, e820_map: &[LongE820]) -> Result<(), Ge
         )?;
     }
 
+    writeln!(
+        &mut handle,
+        "E820 map descriptor: {:?}\n",
+        e820_map as *const _
+    )?;
+
     // Commit changes
+    handle.flush()?;
+
+    // Initialize allocator
+    ALLOCATOR.init(e820_map, 0)?;
+
+    // Dump allocator state
+    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
+    writeln!(&mut handle, "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}", *ALLOCATOR.base(), *ALLOCATOR.head(), *ALLOCATOR.remaining())?;
+
+    // Instantiate vector and loop from it
+    let v: Vec<usize> = vec![1, 2, 3, 5, 8, 13, 21, 36];
+
+    for i in v.iter() {
+        writeln!(&mut handle, " >  Vector entry: {}", i)?;
+    }
+
+    // Dump allocator state again
+    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
+    writeln!(&mut handle, "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}", *ALLOCATOR.base(), *ALLOCATOR.head(), *ALLOCATOR.remaining())?;
+
     handle.flush()?;
 
     Ok(())
@@ -140,7 +217,20 @@ fn single_panic(info: &PanicInfo<'_>) -> ! {
     // 2. write to the console, first by arbitration, then by force
     let f = |c: &mut VgaConsole| {
         c.unset_shadowed();
-        writeln!(c, "(1/2) bootloader panicked: {:?}", info)
+        if let Some(loc) = info.location() {
+            writeln!(
+                c,
+                "(1/2) **bootloader panicked** ({})\n E: {}",
+                loc,
+                info.message()
+            )
+        } else {
+            writeln!(
+                c,
+                "(1/2) **bootloader panicked** (source location unknown)\n E: {}",
+                info.message()
+            )
+        }
     };
 
     // - absorb errors, rather than unwrapping them
@@ -162,7 +252,7 @@ fn single_panic(info: &PanicInfo<'_>) -> ! {
         let _ = unsafe {
             VGA_CONSOLE
                 .get_mut()
-                .write(b"(dev: possible error in formatting or console I/O)\n")
+                .write(b"\n(dev: possible error in formatting or console I/O)\n")
         };
     }
 

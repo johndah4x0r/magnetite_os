@@ -12,10 +12,8 @@ ENTRY(_stub64)            /* make sure _stub64 exists */
 
 SECTIONS {
     /* Text-like */
-    .boot64.text : SUBALIGN(1) {
+    .boot64.text : SUBALIGN(16) {
         KEEP(*(.stub64))
-
-        . = ALIGN(16); 
         *(.text .text.*)
     }
 
@@ -23,9 +21,17 @@ SECTIONS {
 
     /* Data-like */
     .boot64.data : SUBALIGN(1) {
+        . = ALIGN(16);
         *(.rodata .rodata.*)
 
         . = ALIGN(16);
         *(.data .data.*)
     }
+
+    . = ALIGN(16);
+    .boot64.bss : SUBALIGN(1) {
+        *(.bss .bss.*)
+    }
+
+    . = ALIGN(16);
 }
