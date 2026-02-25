@@ -175,6 +175,14 @@ init_bss:
  
 ; Set video mode
 set_video_mode:
+    jmp .main
+.segment:
+    dw 0
+.offset:
+    dw 0
+.mode:
+    dw 0
+.main:
     pushfd                                  ; Preserve flags
 
     ; Obtain information about the VBIOS
@@ -192,43 +200,120 @@ set_video_mode:
     cmp eax, 0x41534556                     ; String: "VESA" (little-endian)
 
     ; Point DS:SI to the video modes array
-    mov dx, [vbe_info_block.video_mode_segment]
-    mov ds, dx
-    mov si, [vbe_info_block.video_mode_offset]
+    mov ds, es:[vbe_info_block.video_mode_segment]
+    mov si, es:[vbe_info_block.video_mode_offset]
+
+    ; - copy DS:SI to locals
+    mov es:[.segment], ds
+    mov es:[.offset], si
 
     cld                                     ; Clear DF
     xor ax, ax                              ; Zero AX
 .top:
+    xchg bx, bx                             ; Breakpoint
+
+    ; Set DS:SI using locals
+    mov ds, es:[.segment]
+    mov si, es:[.offset]
+
     lodsw                                   ; Load one word from the array
     cmp ax, 0xFFFF                          ; Check if we're at the end of the array
-    je .more                                ; If we are, break the loop
+    je .default                             ; If we are, break the loop
+
+    ; Preserve mode ID
+    mov es:[.mode], ax
+
+    ; Store updated DS:SI
+    mov es:[.segment], ds
+    mov es:[.offset], si
 
     ; Process provided mode
-    ; TODO: do something useful
-    push si                                 ; Preserve SI
+    ; - print mode ID
+    push ax                                 ; Preserve AX (mode ID)
+    mov dx, es
+    mov ds, dx
+
     xor dx, dx                              ; Zero DX
     call stringify_num                      ; Stringify 0000:AX
-
     mov bp, sp                              ; Store pre-push SP
     push msgs.crlf                          ; Print newline *last*
     push numstr                             ; Print stringified number
     push msgs.vbe_mode                      ; Print prelude
     call print
+    pop ax                                  ; Restore AX
 
-    pop si                                  ; Restore SI
-    jmp .top                                ; Restart loop
+    ; - query info about selected mode
+    push es                                 ; Preserve ES
+    mov cx, ax                              ; Set CX to AX = mode ID
+    mov ax, 0x4f01                          ; Set AX to "request mode info"
+    lea di, [vbe_mode_info]                 ; Point DI to mode info block
+    clc                                     ; Clear CF
+    int 0x10                                ; Call BIOS
+    pop es                                  ; Restore ES
+
+    cmp ax, 0x004f                          ; Check for success
+    jne .top                                ; Restart loop
+
+    ; Equalize DS and ES
+    mov ax, es
+    mov ds, ax
+
+    ; - check whether the mode satisfies
+    ;   dimension requirements
+    mov ax, [vbe_mode_info.width]
+    mov dx, [vbe_mode_info.height]
+
+    cmp ax, SCREEN_WIDTH                    ; Check mode width
+    jne .top                                ; Discard mode if widths don't match
+    cmp dx, SCREEN_HEIGHT                   ; Check mode height
+    jne .top                                ; Discard mode if heights don't match
+    ; --- fall-through on success --- ;
 .more:
-    ; -- TODO -- ;
-    xchg bx, bx                             ; Breakpoint
+    ; - save dimensions into a separate structure
+    mov [screen_info.width], ax
+    mov [screen_info.height], dx
+
+    mov eax, [vbe_mode_info.framebuffer]
+    mov [screen_info.frame_buf], eax
+
+    mov ax, [vbe_mode_info.pitch]
+    mov [screen_info.pitch], ax
+
+    movzx eax, byte [vbe_mode_info.bpp]
+    mov [screen_info.bpp], al
+    shr eax, 3
+    mov [screen_info.bytes_per_pixel], eax
+
+    ; - commit to selected video mode
+    push es                                 ; Preserve ES
+    mov ax, 0x4f02                          ; (set video mode)
+    mov bx, [.mode]                         ; obtain selected video mode
+    or bx, 0x4000                           ; enable LFB
+    and bx, 0xf7ff                          ; unset bit 11
+    xor di, di                              ; Zero DI (not always needed)
+    clc                                     ; Clear CF
+    int 0x10                                ; Call BIOS
+    pop es                                  ; Restore ES
+
+    cmp ax, 0x004f                          ; Check for success
+    je .done                                ; Leave on success
+    jmp .top                                ; Repeat process on failure
 .default:
+    xor ax, ax
+    mov [.mode], ax
+
+    mov [screen_info.cells_x], 80           ; Set horizontal cell count to 80
+    mov [screen_info.cells_y], 25           ; Set vertical cell count to 25
+
     push es                                 ; Preserve ES
     mov ax, 0x0003                          ; Set video mode to 0x03 (VGA text mode)
     clc                                     ; Clear CF
     int 0x10                                ; Call BIOS
     pop es                                  ; Restore ES
 .done:
-    popfd                                   ; Restore flags
     xchg bx, bx                             ; Breakpoint
+    mov bx, [.mode]                         ; Obtain selected mode ID
+    mov [screen_info.mode], bx              ; Store mode ID in screen info struct
 
 ; Scan for memory using E820
 e820_scan:

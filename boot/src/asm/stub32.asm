@@ -382,7 +382,7 @@ vbe_info_block:
     .oem_data               times 256 db 0
 
 ; VBE mode info block
-vbe_mode_info_block:
+vbe_mode_info:
     .attrs                  dw 0
     .window_a               db 0
     .window_b               db 0
@@ -417,6 +417,20 @@ vbe_mode_info_block:
     .off_screen_mem_offset  dd 0
     .off_screen_mem_size    dw 0
     ._reserved_1            times 206 db 0
+
+; Screen info struct
+; - let the final user calculate cell-equivalent dimensions
+screen_info:
+    .mode                   dw 0    
+    .bytes_per_pixel        dw 0   
+    .width                  dw 0
+    .height                 dw 0
+    .pitch                  dw 0
+    .bpp                    dw 0
+    .cells_x                dw 0
+    .cells_y                dw 0
+    .frame_buf              dd 0
+
 
 ; Pointer to BPB (32-bit pointer extended to 64-bit)
 oem_label:

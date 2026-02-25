@@ -75,6 +75,8 @@ INIT_FRAME                  equ INIT_STACK + ALLOC_SIZE     ; Initial value for 
 
 RDE_FIRST_CLUSTER           equ 26                          ; Offset for cluster ID 0
 
+SCREEN_WIDTH                equ 800                         ; Requested screen width
+SCREEN_HEIGHT               equ 600                         ; Requested screen height
 
 ; Definitions for 'boot/src/stub32.asm'
 NULL                equ 0               ; Null pointer
