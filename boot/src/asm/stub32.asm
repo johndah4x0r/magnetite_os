@@ -62,17 +62,12 @@ calc_paging:
 
     add ecx, E820_DESC_END - E820_DESC_ADDR ; include descriptor size in ECX
     adc ebx, ecx                            ; advance EBX by the total map size                   
-    adc edx, 0                              ; propagate carry, if any
-    jc .stop
+    jc .stop                                ; Stop if EBX exceeds bounds
 
     and bx, 0xf000                          ; discard the lower 12 bits of EBX
-    mov ecx, 0x1000                         ; advance EDX:EBX by 0x1000
+    mov ecx, 0x1000                         ; advance 0:EBX by 0x1000
     add ebx, ecx                            ; (here)
-    adc edx, 0                              ; (propagate carry)
-    jnc .end
-
-    test edx, edx                           ; check whether EDX:EBX exceeds 4 GiB
-    jz .end                                 ; proceed if EDX = 0 and EBX is within bounds
+    jnc .end                                ; proceed if EBX is within bounds
     ; --- fall-through on failure --- ;
 .stop:
     lea esi, [msgs.overflow]
@@ -114,67 +109,79 @@ disable_paging32:
 ; Initialize 64-bit paging
 ; - essentially the same thought process
 ;   as the one outlined in 'wiki.osdev.org'
-; TODO: maybe consider higher-half mapping
+; TODO: maybe consider higher-half mapping,
 ;       in addition to identity mapping
 init_paging:
-    xchg bx, bx                     ; Breakpoint
+    xchg bx, bx                         ; Breakpoint
 
     ; Obtain location of paging structures
     ; (identical to the PML4 address)
-    mov ebx, [page_structs.low]     ; (play paranoid!)
+    mov ebx, [page_structs.low]         ; (play paranoid!)
 
     ; Clear the master page hierarchy
-    lea edi, [ebx + OFFSET_PML4]   ; Point EDI to the highest table
-    mov cr3, edi                    ; Let the CPU know where the tables are
+    lea edi, [ebx + OFFSET_PML4]        ; Point EDI to paging structures base
+    mov cr3, edi                        ; Let the CPU know where the tables are
 
-    ; Write 4 * 4 kiB, which should cover
-    ; all four hierarchy levels
-    xor eax, eax
-    mov ecx, SIZEOF_PT                  ; (should be 4096 B)
-    rep stosd                           ; (write 4 * 4096 B)
+    ; Initialize paging structures
+    xor eax, eax                        ; zero EAX
+    mov ecx, SIZEOF_PTS                 ; obtain structure size in bytes
+    rep stosb                           ; copy zeroes, one byte at a time
 
     xchg bx, bx                         ; Breakpoint
     mov edi, cr3                        ; Reset EDI back to the highest table
-
 .set_flags:
     ; Set flags for each level
     ; - EDI is equal to PML4 address
-    lea eax, [ebx + OFFSET_PDPT]        ; Obtain address for PDPT
-    and ax, 0xf000                      ; Mask off lower 12 bits
-    or eax, PT_PRESENT | PT_READWRITE   ; Apply flags
+    lea eax, [ebx + OFFSET_PDPT]                ; Obtain address for PDPT
+    and ax, 0xf000                              ; Mask off lower 12 bits
+    or eax, PT_PRESENT | PT_READWRITE           ; Apply flags
 
-    mov dword [ebx + OFFSET_PML4], eax  ; Write entry to PML4
+    mov dword [ebx + OFFSET_PML4], eax          ; Write entry to PML4
 
-    lea eax, [ebx + OFFSET_PDT]         ; Obtain address for PDT
-    and ax, 0xf000                      ; Mask off lower 12 bits
-    or eax, PT_PRESENT | PT_READWRITE   ; Apply flags
+    lea eax, [ebx + OFFSET_PDTL]                ; Obtain address for low PDT
+    and ax, 0xf000                              ; Mask off lower 12 bits
+    or eax, PT_PRESENT | PT_READWRITE           ; Apply flags
 
-    mov dword [ebx + OFFSET_PDPT], eax  ; Write to PDPT
+    mov dword [ebx + OFFSET_PDPT], eax          ; Write to PDPT entry 0 (0-1 GiB)
 
-    lea eax, [ebx + OFFSET_PT]          ; Obtain address for PT
-    and ax, 0xf000                      ; Mask off lower 12 bits
-    or eax, PT_PRESENT | PT_READWRITE   ; Apply flags
+    lea eax, [ebx + OFFSET_PDTH]                ; Obtain address for high PDT
+    and ax, 0xf000                              ; Mask off lower 12 bits
+    or eax, PT_PRESENT | PT_READWRITE           ; Apply flags
 
-    mov dword [ebx + OFFSET_PDT], eax   ; Write entry to PDT
-
-.fill_pt:
-    ; Populate PT 0 to identity-map 0-2 MiB
-    ; - which means using standard pages
-    lea edi, [ebx + OFFSET_PT]          ; Point EDI to PT 0
+    mov dword [ebx + OFFSET_PDPT + 24], eax     ; Write entry to PDPT entry 3 (3-4 GiB)
+.fill_pdtl:
+    ; Populate low PDT to identity-map 0-16 MiB
+    ; - which means using large pages (2 MiB)
+    lea edi, [ebx + OFFSET_PDTL]                        ; Point EDI to low PDT
 
     ; - set flags
-    ; - map PT 0, page 0 to 0-4 kiB
-    xor eax, eax                        ; Zero page index
-    mov eax, PT_PRESENT | PT_READWRITE  ; Apply these flags
-    mov ecx, ENTRIES_PER_PT             ; Fill PT 0 with this many entries
-.set_entry_ident:
-    mov dword [edi], eax                ; Write entry to [EDI]
-    add eax, SIZEOF_PAGE                ; Map next physical page
-    add edi, SIZEOF_PT_ENTRY            ; Write to next entry
-    loop .set_entry_ident
+    xor eax, eax                                        ; Point to +0 GiB
+    or eax, PT_PRESENT | PT_READWRITE | PT_PAGESIZE     ; Apply these flags
+    mov ecx, 8                                          ; Fill low PDT with this many entries
+.set_low_entry:
+    mov dword [edi], eax                                ; Write entry to [EDI]
+    add eax, SIZEOF_LARGE_PAGE                          ; Map next physical page
+    add edi, SIZEOF_PT_ENTRY                            ; Write to next entry
+    loop .set_low_entry
+.fill_pdth:
+    ; Populate high PDT to identity-map 3-4 GiB
+    ; - this is so that we can use the VESA LFB,
+    ; which is typically located at +3.5 GiB
+    ; (though its location may vary between
+    ; platform configurations)
+    lea edi, [ebx + OFFSET_PDTH]                        ; Point EDI to high PDT
+
+    ; - set flags
+    mov eax, 3 << 30                                    ; Point to +3 GiB
+    or eax, PT_PRESENT | PT_READWRITE | PT_PAGESIZE     ; Apply these flags
+    mov ecx, ENTRIES_PER_PT                             ; Fill high PDT with this many entries
+.set_high_entry:
+    mov dword [edi], eax                                ; Write entry to [EDI]
+    add eax, SIZEOF_LARGE_PAGE                          ; Map next physical page
+    add edi, SIZEOF_PT_ENTRY                            ; Write to next entry
+    loop .set_high_entry
 .end:
     xchg bx, bx                         ; Breakpoint
-
 .enable_pae:
     mov eax, cr4                        ; Load CR4 into EAX
     or eax, PAE_ENABLE                  ; Enable PAE in CR4

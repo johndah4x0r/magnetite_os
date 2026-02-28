@@ -89,6 +89,7 @@ LM_EDX_CPUID        equ 1 << 29         ; Long mode bit
 NO_PAGING           equ 0x7fffffff      ; No 32-bit paging
 
 PAE_ENABLE          equ 1 << 5          ; Enable PAE in CR4
+PSE_ENABLE          equ 1 << 4          ; Enable PSE (large pages) in CR4
 PG_ENABLE           equ 1 << 31         ; Enable paging in CR0
 
 
@@ -99,20 +100,19 @@ SIZEOF_PT           equ 1 << 12         ; Sets page table size to 4 kiB
 ; - location of PML4 table (master hierarchy)
 ; (offset relative to page boundary-aligned base
 ; just past the E820 map)
-OFFSET_PTS          equ 0
-OFFSET_PML4         equ OFFSET_PTS
+OFFSET_PML4         equ 0
 
 ; - location of PDP table (huge)
 OFFSET_PDPT         equ OFFSET_PML4 + SIZEOF_PT
 
-; - location of page directory table (large)
-OFFSET_PDT          equ OFFSET_PDPT + SIZEOF_PT
+; - location of low page directory table (large)
+OFFSET_PDTL         equ OFFSET_PDPT + SIZEOF_PT
 
-; - location of page table(s) (standard)
-OFFSET_PT           equ OFFSET_PDT + SIZEOF_PT
+; - location of high page directory table
+OFFSET_PDTH         equ OFFSET_PDTL + SIZEOF_PT
 
 ; - size of the bootstrap paging hierarchy
-SIZEOF_PTS          equ OFFSET_PT + SIZEOF_PT - OFFSET_PML4
+SIZEOF_PTS          equ OFFSET_PDTH + SIZEOF_PT - OFFSET_PML4
 
 ; Page masks and flags
 PT_ADDR_MASK        equ 0xffffffffff000 ; Mask to align addresses to 4 kiB
@@ -121,6 +121,7 @@ PT_READWRITE        equ 2               ; Marks page as R/W
 PT_PAGESIZE         equ 128             ; Marks page as large/huge (if needed)
 
 SIZEOF_PAGE         equ 1 << 12         ; Sets page size to 4 kiB (normal pages)
+SIZEOF_LARGE_PAGE   equ 1 << 21         ; Sets page size to 2 MiB (large pages)
 
 EFER_MSR            equ 0xC0000080      ; EFER MSR address
 EFER_LME            equ 0x100           ; EFER IA-32e set bit

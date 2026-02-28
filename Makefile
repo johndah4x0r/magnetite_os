@@ -27,10 +27,12 @@ all: $(BUILD_DIR) $(BUILD_DIR)/vbr.bin $(BUILD_DIR)/boot1.bin
 
 clean:
 	rm -r $(BUILD_DIR) || true
+	rm -f .patch_vbr*.log
+
+clean_all: clean
 	cargo clean --manifest-path $(BOOT_RS_MANIFEST)
 	cargo clean --manifest-path $(KERN_RS_MANIFEST)
 	cargo clean --manifest-path $(COMMON_RS_MANIFEST)
-	rm -f .patch_vbr*.log
 
 bootimg: $(BUILD_DIR)/boot.img
 
