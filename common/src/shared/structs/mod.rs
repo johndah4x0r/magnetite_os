@@ -6,7 +6,7 @@
     (if they contain anything at all).
 */
 
-use core::ops::{Deref, DerefMut, Index, IndexMut};
+use core::ops::{Index, IndexMut};
 
 // Volatile wrapper type
 pub mod volatile;
@@ -23,27 +23,54 @@ pub mod spin_lock;
     This buffer **cannot** be used in `const` or `static`, as
     its contents cannot be initialized at compile-time.
 */
-pub struct RingBuf<T: Default + Copy, const N: usize> {
-    inner: Array<T, N>,
+
+// - use linear buffer internally
+pub struct RingBuf<'a, T: Default + Copy> {
+    inner: &'a mut [T],
+    cols: usize,
+    rows: usize,
     head: usize,
 }
 
-impl<T: Default + Copy, const N: usize> RingBuf<T, N> {
-    // - constant assertion (Rust 1.57+)
-    const _ASSERT_NON_ZERO: () = assert!(N > 0);
+impl<'a, T: Default + Copy> RingBuf<'a, T> {
+    /**
+        Create new instance of `RingBuf`
 
-    /// Create new instance of `RingBuf`
-    pub fn new() -> Self {
-        RingBuf {
-            inner: Array::<T, N>::default(),
-            head: 0,
+        # Usage
+        Both `rows` and `cols` must be non-zero. The provided
+        buffer `buf` must be able to accomodate at least
+        `rows * cols` elements of type `T`.
+    */
+    pub fn new(buf: &'a mut [T], cols: usize, rows: usize) -> Option<Self> {
+        // - calculate capcity
+        let capacity = rows * cols;
+
+        // - this should cop out if either
+        // `rows` or `cols` is equal to zero
+        if buf.len() < capacity || rows == 0 || cols == 0 {
+            return None;
         }
+
+        // - obtain buffer as large as the calculated capacity
+        let inner = &mut buf[0..capacity];
+
+        // - initialize contents
+        for e in inner {
+            *e = T::default();
+        }
+
+        Some(RingBuf {
+            inner: &mut buf[0..capacity],
+            rows,
+            cols,
+            head: 0,
+        })
     }
 
     /// Rotate the buffer left by a specified amount
     /// (equivalent to shifting the buffer head to the right)
     pub fn rol(&mut self, n: usize) {
-        self.head = (self.head + n) % N;
+        self.head = (self.head + n) % self.rows;
     }
 
     /// Rotate the buffer right by a specified amount
@@ -51,50 +78,23 @@ impl<T: Default + Copy, const N: usize> RingBuf<T, N> {
     pub fn ror(&mut self, n: usize) {
         // - calculate new head position using N's complement
         // (we trust that `N != 0`)
-        let m = n.div_ceil(N);
-        self.head = (self.head + m * N - n) % N;
+        let m = n.div_ceil(self.rows);
+        self.head = (self.head + m * self.rows - n) % self.rows;
     }
 }
 
-impl<T: Default + Copy, const N: usize> Index<usize> for RingBuf<T, N> {
-    type Output = T;
+impl<'a, T: Default + Copy> Index<usize> for RingBuf<'a, T> {
+    type Output = [T];
 
     fn index(&self, index: usize) -> &Self::Output {
-        let n = (self.head + index) % N;
-        &self.inner[n]
+        let n = (self.head + index) % self.rows;
+        &self.inner[n * self.cols..(n + 1) * self.cols]
     }
 }
 
-impl<T: Default + Copy, const N: usize> IndexMut<usize> for RingBuf<T, N> {
+impl<'a, T: Default + Copy> IndexMut<usize> for RingBuf<'a, T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        let n = (self.head + index) % N;
-        &mut self.inner[n]
-    }
-}
-
-/// Wrapper type for an array of type `T`
-// - at this point, we aren't coding
-// in Rust - we are speaking legalese
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone)]
-pub struct Array<T: Default + Copy, const N: usize>([T; N]);
-
-impl<T: Default + Copy, const N: usize> Default for Array<T, N> {
-    fn default() -> Self {
-        Array([T::default(); N])
-    }
-}
-
-impl<T: Default + Copy, const N: usize> Deref for Array<T, N> {
-    type Target = [T; N];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: Default + Copy, const N: usize> DerefMut for Array<T, N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        let n = (self.head + index) % self.rows;
+        &mut self.inner[n * self.cols..(n + 1) * self.cols]
     }
 }

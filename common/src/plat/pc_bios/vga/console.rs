@@ -7,7 +7,7 @@
 use crate::shared::structs::volatile::VolatileCell;
 
 // Fundamental data structures
-use crate::shared::structs::{Array, RingBuf};
+use crate::shared::structs::RingBuf;
 
 // I/O helpers
 use crate::shared::io::{Error, Write};
@@ -91,11 +91,11 @@ pub struct VgaConsole<'a> {
     trunc: bool,
     buffered: bool,
     escaped: bool,
-    shadow: Option<RingBuf<Array<u16, MAX_SHADOW_COLS>, MAX_SHADOW_ROWS>>,
+    shadow: Option<RingBuf<'a, u16>>,
     _marker: PhantomData<&'a VolatileCell<u16>>,
 }
 
-impl VgaConsole<'_> {
+impl<'a> VgaConsole<'a> {
     /**
         Create new instance of `VgaConsole`
 
@@ -150,11 +150,12 @@ impl VgaConsole<'_> {
         This is not strictly necessary for normal use,
         but performance may degrade significantly.
     */
-    pub fn init(&mut self) {
+    pub fn init(&mut self, buf: &'a mut [u16]) {
         // Only allow buffering if dimensions are
         // within "worst-case" bounds
-        if self.cols <= MAX_SHADOW_COLS && self.rows <= MAX_SHADOW_ROWS {
-            self.shadow = Some(RingBuf::new());
+        let s = RingBuf::new(buf, self.cols, self.rows);
+        if s.is_some() {
+            self.shadow = s;
             self.buffered = true;
         }
     }
@@ -475,7 +476,7 @@ impl VgaConsole<'_> {
             for r in 0..self.rows {
                 // - calculate references to lines, so as to save cycles
                 let buf_line = unsafe { self.line_get_ref(self.page, r) };
-                let shadow_line = shadow[r];
+                let shadow_line = &shadow[r];
 
                 for c in 0..self.cols {
                     // - perform volatile write to the text buffer

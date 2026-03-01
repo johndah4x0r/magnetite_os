@@ -93,41 +93,6 @@ fn main(
     // Clear screen
     handle.clear()?;
 
-    // Initialize the shadow buffer
-    handle.init();
-
-    // Write to screen
-    writeln!(
-        &mut handle,
-        "*** Welcome to magnetite_os, revision 2026-02-25 ***\n"
-    )?;
-
-    writeln!(
-        &mut handle,
-        "Double-panic message: '{}' @ {:?}",
-        MSG_DOUBLE_PANIC,
-        &MSG_DOUBLE_PANIC as *const _
-    )?;
-
-    writeln!(
-        &mut handle,
-        "Panic flag: '{:0>16x}' @ {:?}",
-        PANIC_FLAG.load(Ordering::SeqCst),
-        &PANIC_FLAG as *const _
-    )?;
-
-    writeln!(
-        &mut handle,
-        "Console wrapper location: {:?}",
-        &VGA_CONSOLE as *const _
-    )?;
-
-    let handle_p = &*handle as *const _;
-    writeln!(&mut handle, "Console backend location: {:?}", handle_p)?;
-
-    // Commit changes
-    handle.flush()?;
-
     // Print screen info
     writeln!(&mut handle, "*** Screen information ***")?;
     writeln!(
