@@ -8,3 +8,6 @@ pub mod structs;
 
 // VGA console definitions
 pub mod vga;
+
+// VESA framebuffer definitions
+pub mod vesa;

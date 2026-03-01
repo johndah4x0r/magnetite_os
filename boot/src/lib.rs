@@ -23,8 +23,9 @@ mod allocator;
 use allocator::BumpAllocator;
 
 // - BIOS-specific structures
-use common::plat::pc_bios::structs::{BiosPB, LongE820, ScreenInfo};
+use common::plat::pc_bios::structs::{BiosPB, LongE820};
 use common::plat::pc_bios::vga::console;
+use common::plat::pc_bios::vesa::ScreenInfo;
 use console::VgaConsole;
 
 // Double-panic message
