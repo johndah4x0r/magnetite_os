@@ -264,25 +264,16 @@ printb:
     ret
 
 ; Panic with reason
+; CAUTION: drops down to real mode
 ; Accepts:
-; - ESI: pointer to null-terminated string
-; - DS, ES = 0x10: data segment
+; - SI: pointer to null-terminated string
+; (DS will be set to zero on drop-down)
 panicb:
-    ; Print preamble first
-    push esi                    ; Save original ESI
-    lea esi, [msgs.panic]       ; Point ESI to preamble
-    call printb
-
-    ; Then print reason
-    pop esi                     ; Restore original ESI
-    call printb
-
-    ; Halt indefinitely
-    ; - ideally, we'd poll the keyboard and reset, 
-    ; but that's not feasible nor necessary in a 
-    ; 32-bit PM stub - which is a transient stage
-    cli                         ; Kill interrupts
-    hlt
+    ; TODO: perform a controlled drop-down
+    mov eax, cr0                ; Obtain CR0
+    and al, 0xfe                ; Unset CR0.PE
+    mov cr0, eax                ; Write back to CR0
+    jmp 0x0000:panic            ; Drop down to real mode
 
 ; separating text from data isn't that
 ; crucial in binary executables, but
@@ -350,7 +341,7 @@ msgs:
     .mem_too_small  db "Insufficient memory detected (less than 256 kiB)", 0
     .overflow       db "Arithmetic overflow", 0
     .reset          db "Replace boot device, and press <Enter> to reset", 0
-
+    .example        db "Test panic triggered", 0
     .crlf           db 0x0a, 0x0d, 0
 
 ; Nibble characters
@@ -413,13 +404,13 @@ vbe_mode_info:
     .image_pages            db 0
     ._reserved_0            db 0
     .red_mask               db 0
-    .red_position           db 0
+    .red_pos                db 0
     .green_mask             db 0
-    .green_position         db 0
+    .green_pos              db 0
     .blue_mask              db 0
-    .blue_position          db 0
+    .blue_pos               db 0
     .reserved_mask          db 0
-    .reserved_position      db 0
+    .reserved_pos           db 0
     .direct_color_attrs     db 0
     .framebuffer            dd 0
     .off_screen_mem_offset  dd 0
@@ -428,17 +419,24 @@ vbe_mode_info:
 
 ; Screen info struct
 ; - let the final user calculate cell-equivalent dimensions
+; The packed values should be composed as follows: XXRRGGBBh
 screen_info:
     .mode                   dw 0    
-    .bytes_per_pixel        dw 0   
+    .bytes_per_pixel        dw 0
+
     .width                  dw 0
     .height                 dw 0
+
     .pitch                  dw 0
     .bpp                    dw 0
+
     .cells_x                dw 0
     .cells_y                dw 0
-    .frame_buf              dd 0
 
+    .packed_mask            dd 0
+    .packed_pos             dd 0
+    .frame_buf              dd 0
+.end:
 
 ; Pointer to BPB (32-bit pointer extended to 64-bit)
 oem_label:

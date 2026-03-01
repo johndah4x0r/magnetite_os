@@ -58,6 +58,9 @@ _stub16:
     cld                                     ; Clear DF
     mov byte [bootdev], al                  ; Store boot drive number
 
+    lea ax, [msgs.reason]                   ; Point AX to prelude for panic message
+    mov [panic.reason], ax                  ; Point `panic.reason` to prelude
+
 ; Check for CPU capability
 ; - assumes IF = 0 for atomicity
 cpu_check:
@@ -175,16 +178,19 @@ init_bss:
  
 ; Set video mode
 set_video_mode:
-    jmp .main
+    ;jmp .default                            ; FIXME: skip scanning (for testing purposes)
+    jmp .main                               ; skip embedded locals
 .segment:
     dw 0
 .offset:
     dw 0
 .mode:
     dw 0
+.alt_mode:
+    dw 0
+.use_alt:
+    dw 0
 .main:
-    pushfd                                  ; Preserve flags
-
     ; Obtain information about the VBIOS
     push es                                 ; Preserve ES
     lea di, [vbe_info_block]                ; Point DE to VBE info block
@@ -194,10 +200,11 @@ set_video_mode:
     pop es                                  ; Restore ES
 
     cmp ax, 0x004f                          ; Check whether the call was a success
-    jne .default                            ; If not, we're done here
+    jne .default                            ; If not, give up
 
     mov eax, [vbe_info_block.signature]     ; Obtain signature
     cmp eax, 0x41534556                     ; String: "VESA" (little-endian)
+    jne .default                            ; If the signature doesn't match, give up
 
     ; Point DS:SI to the video modes array
     mov ds, es:[vbe_info_block.video_mode_segment]
@@ -218,15 +225,22 @@ set_video_mode:
 
     lodsw                                   ; Load one word from the array
     cmp ax, 0xFFFF                          ; Check if we're at the end of the array
-    je .default                             ; If we are, break the loop
+    jne .normal                             ; If not, continue normal operation
 
+    mov ax, es:[.alt_mode]                  ; Obtain alternative mode ID
+    test ax, ax                             ; Check its value
+    jz .default                             ; If it isn't set, fall back
+    mov word es:[.use_alt], 1               ; Otherwise, set the "use alternative mode" flag
+    mov word es:[.alt_mode], 0              ; Zero alternative mode ID in case of re-entrancy
+    ; --- fall-through --- ;
+.normal:
     ; Preserve mode ID
     mov es:[.mode], ax
 
     ; Store updated DS:SI
     mov es:[.segment], ds
     mov es:[.offset], si
-
+.query_mode_info:
     ; Process provided mode
     ; - print mode ID
     push ax                                 ; Preserve AX (mode ID)
@@ -260,30 +274,56 @@ set_video_mode:
 
     ; - check whether the mode satisfies
     ;   dimension requirements
-    mov ax, [vbe_mode_info.width]
-    mov dx, [vbe_mode_info.height]
+    ; TODO: decide whether to enforce XRGB,
+    ; or whether to merely prioritize it
+    cmp word [vbe_mode_info.width], SCREEN_WIDTH    ; Check mode width
+    jne .top                                        ; Discard mode if widths don't match
+    cmp word [vbe_mode_info.height], SCREEN_HEIGHT  ; Check mode height
+    jne .top                                        ; Discard mode if heights don't match
 
-    cmp ax, SCREEN_WIDTH                    ; Check mode width
-    jne .top                                ; Discard mode if widths don't match
-    cmp dx, SCREEN_HEIGHT                   ; Check mode height
-    jne .top                                ; Discard mode if heights don't match
+    mov bl, [vbe_mode_info.memory_model]
+    cmp bl, 6                                       ; Check memory model
+    jne .top                                        ; Discard mode if `memory_model != 6`
     ; --- fall-through on success --- ;
 .more:
-    ; - save dimensions into a separate structure
-    mov [screen_info.width], ax
-    mov [screen_info.height], dx
+    xchg bx, bx                                     ; Breakpoint
 
-    mov eax, [vbe_mode_info.framebuffer]
-    mov [screen_info.frame_buf], eax
+    ; (sanity check: make sure that pointer
+    ; to the frame buffer is non-null)
+    mov edx, [vbe_mode_info.framebuffer]
+    test edx, edx                           ; Check if EDX = 0
+    jz .top                                 ; Discard mode if EDX = 0
 
-    mov ax, [vbe_mode_info.pitch]
-    mov [screen_info.pitch], ax
+    ; Formulate packed values
+    xor eax, eax                            ; Zero EAX
+    mov al, [vbe_mode_info.reserved_mask]   ; Store reserved mask size (alpha?)
+    shl eax, 8                              ; Shift to the left by one byte
+    mov al, [vbe_mode_info.red_mask]        ; Store red mask size
+    shl eax, 8                              ; Shift to the left by one byte
+    mov al, [vbe_mode_info.green_mask]      ; Store green mask size
+    shl eax, 8                              ; Shift to the left by one byte
+    mov al, [vbe_mode_info.blue_mask]       ; Store blue mask size
 
-    movzx eax, byte [vbe_mode_info.bpp]
-    mov [screen_info.bpp], al
-    shr eax, 3
-    mov [screen_info.bytes_per_pixel], eax
+    mov [screen_info.packed_mask], eax      ; Store packed mask sizes
+    mov [screen_info.frame_buf], edx        ; Store pointer to frame buffer
 
+    mov cx, [.use_alt]                      ; Obtain "use alternative mode" flag
+    test cx, cx                             ; Assert its value
+    jnz .accept_mode                        ; Accept current mode if set
+    ; --- fall-through --- ;
+
+    mov ebx, eax                            ; Copy EAX for analysis
+    and ebx, 0x00ffffff                     ; Discard reserved mask size
+    cmp ebx, 0x00080808                     ; Check if the mode is A/X+RGB
+    je .accept_mode                         ; If so, accept the mode
+    cmp ebx, 0x00050605                     ; Check if the mode is 5:6:5
+    jne .top                                ; If not, go back to top
+
+    ; - accept 5:6:5 only as last resort
+    mov ax, [.mode]                         ; Obtain mode number
+    mov [.alt_mode], ax                     ; Save it as almost-match
+    jmp .top                                ; Go back to top
+.accept_mode:
     ; - commit to selected video mode
     push es                                 ; Preserve ES
     mov ax, 0x4f02                          ; (set video mode)
@@ -295,12 +335,48 @@ set_video_mode:
     int 0x10                                ; Call BIOS
     pop es                                  ; Restore ES
 
-    cmp ax, 0x004f                          ; Check for success
-    je .done                                ; Leave on success
-    jmp .top                                ; Repeat process on failure
-.default:
-    mov word [.mode], 3                     ; Set mode to 0x03
+    xchg bx, bx                             ; Breakpoint
 
+    cmp ax, 0x004f                          ; Check for success
+    jne .top                                ; Go back to top on failure
+
+    ; - save dimensions into a separate structure
+    mov ax, [vbe_mode_info.width]           ; display width
+    mov dx, [vbe_mode_info.height]          ; display height
+    mov [screen_info.width], ax
+    mov [screen_info.height], dx
+
+    mov ax, [vbe_mode_info.pitch]           ; bytes per scanline
+    mov [screen_info.pitch], ax
+
+    movzx eax, byte [vbe_mode_info.bpp]     ; bits per pixel
+    mov [screen_info.bpp], al
+    shr ax, 3                               ; (divide by 8 to obtain byte)
+    mov [screen_info.bytes_per_pixel], ax   ; bytes per pixel
+
+    ; Formulate packed mask positions
+    xor eax, eax                            ; Zero EAX
+    mov al, [vbe_mode_info.reserved_pos]    ; Store reserved mask position (alpha?)
+    shl eax, 8                              ; Shift to the left by one byte
+    mov al, [vbe_mode_info.red_pos]         ; Store red mask position
+    shl eax, 8                              ; Shift to the left by one byte
+    mov al, [vbe_mode_info.green_pos]       ; Store green mask position
+    shl eax, 8                              ; Shift to the left by one byte
+    mov al, [vbe_mode_info.blue_pos]        ; Store blue mask position
+    mov [screen_info.packed_pos], eax       ; Store packed mask positions
+
+    jmp .done                               ; Break out
+.default:
+    xchg bx, bx                             ; Breakpoint
+
+    ; Zero all fields in the screen info struct
+    lea di, [screen_info]                   ; Obtain start of struct
+    lea cx, [screen_info.end]               ; Obtain end of struct
+    sub cx, di                              ; Calculate size in bytes
+    xor al, al                              ; Zero AL
+    rep stosb                               ; Write zeroes (assume DF = 0)
+
+    mov word [screen_info.mode], 3          ; Set mode to 0x03
     mov word [screen_info.cells_x], 80      ; Set horizontal cell count to 80
     mov word [screen_info.cells_y], 25      ; Set vertical cell count to 25
 
@@ -311,8 +387,6 @@ set_video_mode:
     pop es                                  ; Restore ES
 .done:
     xchg bx, bx                             ; Breakpoint
-    mov bx, [.mode]                         ; Obtain selected mode ID
-    mov [screen_info.mode], bx              ; Store mode ID in screen info struct
 
 ; Scan for memory using E820
 e820_scan:
@@ -347,8 +421,8 @@ e820_scan:
     jc .stop                                ; Do not proceed if memory
                                             ; size cannot be assessed
 
-    cmp ax, 256                             ; Make sure we have at least 
-                                            ; 256 kiB of continuous memory
+    cmp ax, 512                             ; Make sure we have at least 
+                                            ; 512 kiB of continuous memory
 
     jge .cont                               ; Proceed if true
     ; --- fall-through --- ;
@@ -522,8 +596,6 @@ fast_a20:
 .fast_a20_after:
     xchg bx, bx                             ; Breakpoint in Bochs 
 
-create_e820_desc:
-
 ; Enter 32-bit protected mode
 enter_pm:
     ; Here we go...
@@ -537,13 +609,31 @@ enter_pm:
     jmp gdt32.kern_cs:_stub32
     ; --- wishfull fall-through --- ;
 
+; Trigger a panic for testing purposes
+test_panic:
+    lea si, [msgs.example]
+    ; --- fall-through --- ;
+
 ; Print error message and reset
 ; - SI: pointer to reason string
+; TODO: handle potential drop-downs from protected mode
 panic:
     xchg bx, bx                             ; Breakpoint in Bochs
+    jmp .main
+.reason:
+    dw 0
+.main:
+    ; Zero segment registers
     xor ax, ax
     mov ds, ax
     mov es, ax
+
+    ; Reset video mode
+    push es                                 ; Preserve ES
+    mov ax, 0x0003                          ; Set video mode to 0x03 (VGA text mode)
+    clc                                     ; Clear CF
+    int 0x10                                ; Call BIOS
+    pop es                                  ; Restore ES
 
     pop ax                                  ; Pop calling IP to AX
     mov dx, cs                              ; Store CS in DX
@@ -556,7 +646,7 @@ panic:
     push msgs.reset                         ; Request to reset
     push msgs.crlf                          ; Newline
     push si                                 ; Provided reason
-    push msgs.reason                        ; Prelude
+    push word [.reason]                     ; Prelude
     push msgs.crlf                          ; Newline
     push numstr                             ; CS:IP string
     push msgs.panic16                       ; Error message
