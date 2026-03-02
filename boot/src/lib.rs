@@ -87,14 +87,37 @@ fn main(
     e820_map: &'static [LongE820],
     screen_info: &'static ScreenInfo,
 ) -> Result<(), GenericError> {
+    // Initialize allocator
+    ALLOCATOR.init(e820_map, 0)?;
+
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
 
     // Clear screen
     handle.clear()?;
 
+    // Initialize text buffer
+    let (cells_x, cells_y) = (screen_info.cells_x(), screen_info.cells_y());
+    let num_cells = cells_x * cells_y;
+
+    // - allocate a 125%-sized buffer
+    let mut buf: Vec<u16> = vec![0; num_cells + num_cells / 4];
+    let text_buf: &'static mut [u16] = buf.leak();
+
+    // Initialize the console's geometry and shadow buffer
+    unsafe {
+        handle.set_dims(cells_x, cells_y);
+    }
+    handle.init(text_buf);
+
+    // Write to screen
+    writeln!(
+        &mut handle,
+        "*** Welcome to magnetite_os, revision 2026-03-02 ***\n"
+    )?;
+
     // Print screen info
-    writeln!(&mut handle, "*** Screen information ***")?;
+    writeln!(&mut handle, " --- (Screen information) --- ")?;
     writeln!(
         &mut handle,
         " >  Mode:\t\t\t\t {:0>3x}h",
@@ -147,51 +170,12 @@ fn main(
 
     writeln!(
         &mut handle,
-        "E820 map descriptor: {:?}\n",
-        e820_map as *const _
+        "E820 map descriptor:\t{:?},\t{}\n",
+        e820_map as *const _ as *const (),
+        e820_map.len(),
     )?;
 
     // Commit changes
-    handle.flush()?;
-
-    // Initialize allocator
-    ALLOCATOR.init(e820_map, 0)?;
-
-    // Dump allocator state
-    writeln!(
-        &mut handle,
-        " I: Allocator location: {:?}",
-        &ALLOCATOR as *const _
-    );
-    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
-    writeln!(
-        &mut handle,
-        "\t0x{:0>16x}\t0x{:0>16x}\t0x{:0>16x}",
-        *ALLOCATOR.base(),
-        *ALLOCATOR.head(),
-        *ALLOCATOR.remaining()
-    )?;
-    handle.flush()?;
-
-    freeze();
-
-    // Instantiate vector and loop from it
-    let v: Vec<usize> = vec![1, 2, 3, 5, 8, 13, 21, 36];
-
-    for i in v.iter() {
-        writeln!(&mut handle, " >  Vector entry: {}", i)?;
-    }
-
-    // Dump allocator state again
-    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
-    writeln!(
-        &mut handle,
-        "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}",
-        *ALLOCATOR.base(),
-        *ALLOCATOR.head(),
-        *ALLOCATOR.remaining()
-    )?;
-
     handle.flush()?;
 
     Ok(())

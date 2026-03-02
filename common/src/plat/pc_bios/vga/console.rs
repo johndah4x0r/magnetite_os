@@ -145,10 +145,30 @@ impl<'a> VgaConsole<'a> {
     }
 
     /**
+        Set console dimensions
+
+        # Safety
+        It is the caller's responsibility to ensure that the
+        provided dimensions are appropriate for the current
+        display mode.
+    */
+    pub unsafe fn set_dims(&mut self, cols: usize, rows: usize) {
+        self.cols = cols;
+        self.rows = rows;
+    }
+
+    /**
         Initialize the internal shadow buffer
 
         This is not strictly necessary for normal use,
         but performance may degrade significantly.
+
+        # Safety
+        One should call [`set_dims()`] before calling `init()`,
+        as `init()` commits the console to a specific buffer
+        geometry.
+
+        [`set_dims()`]: Self::set_dims
     */
     pub fn init(&mut self, buf: &'a mut [u16]) {
         // Only allow buffering if dimensions are
