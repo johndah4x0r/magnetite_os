@@ -340,6 +340,10 @@ set_video_mode:
     cmp ax, 0x004f                          ; Check for success
     jne .top                                ; Go back to top on failure
 
+    ; - save display mode
+    mov bx, [.mode]
+    mov [screen_info.mode], bx
+
     ; - save dimensions into a separate structure
     mov ax, [vbe_mode_info.width]           ; display width
     mov dx, [vbe_mode_info.height]          ; display height

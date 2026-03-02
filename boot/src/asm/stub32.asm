@@ -144,11 +144,48 @@ init_paging:
 
     mov dword [ebx + OFFSET_PDPT], eax          ; Write to PDPT entry 0 (0-1 GiB)
 
+    ; Determine whether identity-mapping
+    ; the PCI hole is even worth while
+    mov dx, [screen_info.mode]                  ; Obtain display mode
+    cmp dx, 0x100                               ; Check if it is a VESA mode
+    jl .fill_pdtl                               ; (skip to filling the low PDT if not)
+
+    mov edx, [screen_info.frame_buf]            ; Obtain pointer to VESA LFB
+    shr edx, 30                                 ; Round EDX down to the nearest gigabyte
+    test edx, edx                               ; Check if the pointer is non-null
+    jz .fill_pdtl                               ; (skip to filling the low PDT if null)
+
     lea eax, [ebx + OFFSET_PDTH]                ; Obtain address for high PDT
     and ax, 0xf000                              ; Mask off lower 12 bits
     or eax, PT_PRESENT | PT_READWRITE           ; Apply flags
 
-    mov dword [ebx + OFFSET_PDPT + 24], eax     ; Write entry to PDPT entry 3 (3-4 GiB)
+    ; - God bless the 8086 designers for this
+    ;   *atrocious* addressing scheme!
+    ;
+    ;   Need to use complex register math? Fear not.
+    ;   So long as you use a sanctioned base register
+    ;   like EBX, you can use whatever register as an
+    ;   index: `addr = base + offset + scale * index`
+    lea edi, [ebx + OFFSET_PDPT + SIZEOF_PT_ENTRY * edx]
+
+    mov dword [edi], eax                        ; Write entry to PDPT entry `EDX >> 30`
+.fill_pdth:
+    ; Populate high PDT to identity-map the
+    ; VESA LFB, which is typically located
+    ; at +3.5 GiB (though its location may
+    ; vary between platform configurations)
+    lea edi, [ebx + OFFSET_PDTH]                        ; Point EDI to high PDT
+
+    ; - set flags
+    mov eax, edx                                        ; Get gigabyte index
+    shl eax, 30                                         ; Calculate base in bytes
+    or eax, PT_PRESENT | PT_READWRITE | PT_PAGESIZE     ; Apply these flags
+    mov ecx, ENTRIES_PER_PT                             ; Fill high PDT with this many entries
+.set_high_entry:
+    mov dword [edi], eax                                ; Write entry to [EDI]
+    add eax, SIZEOF_LARGE_PAGE                          ; Map next physical page
+    add edi, SIZEOF_PT_ENTRY                            ; Write to next entry
+    loop .set_high_entry
 .fill_pdtl:
     ; Populate low PDT to identity-map 0-16 MiB
     ; - which means using large pages (2 MiB)
@@ -163,23 +200,6 @@ init_paging:
     add eax, SIZEOF_LARGE_PAGE                          ; Map next physical page
     add edi, SIZEOF_PT_ENTRY                            ; Write to next entry
     loop .set_low_entry
-.fill_pdth:
-    ; Populate high PDT to identity-map 3-4 GiB
-    ; - this is so that we can use the VESA LFB,
-    ; which is typically located at +3.5 GiB
-    ; (though its location may vary between
-    ; platform configurations)
-    lea edi, [ebx + OFFSET_PDTH]                        ; Point EDI to high PDT
-
-    ; - set flags
-    mov eax, 3 << 30                                    ; Point to +3 GiB
-    or eax, PT_PRESENT | PT_READWRITE | PT_PAGESIZE     ; Apply these flags
-    mov ecx, ENTRIES_PER_PT                             ; Fill high PDT with this many entries
-.set_high_entry:
-    mov dword [edi], eax                                ; Write entry to [EDI]
-    add eax, SIZEOF_LARGE_PAGE                          ; Map next physical page
-    add edi, SIZEOF_PT_ENTRY                            ; Write to next entry
-    loop .set_high_entry
 .end:
     xchg bx, bx                         ; Breakpoint
 .enable_pae:
