@@ -58,11 +58,11 @@ impl From<ShortE820> for PhysMemRegion {
         let base = value.base() as usize;
         let size = value.size() as usize;
         let kind = match value.area_type() {
-            1 => PhysMemKind::Regular,
-            2 => PhysMemKind::Reserved(None),
-            3 => PhysMemKind::Reclaimable(None),
-            4 => PhysMemKind::NonVolatile(None),
-            _ => PhysMemKind::Other(None),
+            1 => PhysMemKind::regular(),
+            2 => PhysMemKind::reserved(None),
+            3 => PhysMemKind::reclaimable(None),
+            4 => PhysMemKind::non_volatile(None),
+            _ => PhysMemKind::other(None),
         };
 
         PhysMemRegion::new(base, size, kind)
@@ -109,11 +109,11 @@ impl From<LongE820> for PhysMemRegion {
         let size = value.size() as usize;
         let attr = value.acpi_attr() as usize;
         let kind = match value.area_type() {
-            1 => PhysMemKind::Regular,
-            2 => PhysMemKind::Reserved(Some(attr)),
-            3 => PhysMemKind::Reclaimable(Some(attr)),
-            4 => PhysMemKind::NonVolatile(Some(attr)),
-            _ => PhysMemKind::Other(Some(attr)),
+            1 => PhysMemKind::regular(),
+            2 => PhysMemKind::reserved(Some(attr)),
+            3 => PhysMemKind::reclaimable(Some(attr)),
+            4 => PhysMemKind::non_volatile(Some(attr)),
+            _ => PhysMemKind::other(Some(attr)),
         };
 
         PhysMemRegion::new(base, size, kind)

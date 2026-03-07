@@ -1,14 +1,26 @@
+/*!
+    Internal module defining a region-aware bump allocator
+
+    The sole purpose of this module is to facilicate boot-time
+    use of dynamically-allocated structures like [`Vec<T>`]
+    and [`Box<T>`].
+
+    [`Vec<T>`]: alloc::vec::Vec
+    [`Box<T>`]: alloc::boxed::Box
+*/
+
 // Standard definitions
 use core::alloc::{GlobalAlloc, Layout};
-use core::cell::UnsafeCell;
 use core::ptr::null_mut;
 
 // Internal definitions
 use common::shared::GenericError;
-use common::shared::mm::{LogicalMemRegion, PhysMemRegion};
+use common::shared::mm::{MemoryRegion, MemoryRegionKind, PhysMemRegion};
+use common::shared::structs::spin_lock::Mutex;
 
 // Helper routine: round up given address to the nearest aligned address
 #[inline(always)]
+#[doc(hidden)]
 fn round_addr(base: usize, align: usize) -> usize {
     if base % align == 0 {
         base
@@ -17,24 +29,88 @@ fn round_addr(base: usize, align: usize) -> usize {
     }
 }
 
-/// Bump allocator that uses a memory layout provided by E820
+/**
+    A "memory region kind" descriptor specifically for boot image regions
+*/
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct BootImage {
+    protected: usize,
+    usable: usize,
+}
+
+impl BootImage {
+    pub const fn new(protected: bool, usable: bool) -> Self {
+        // - ooo... spooky ABI boundaries...
+        BootImage {
+            protected: if protected { 1 } else { 0 },
+            usable: if usable { 1 } else { 0 },
+        }
+    }
+
+    pub fn try_reclaim(&mut self) -> Result<bool, ()> {
+        if self.protected == 1 {
+            Err(())
+        } else {
+            let old = self.usable;
+            self.usable = 1;
+            Ok(old == 1)
+        }
+    }
+
+    pub unsafe fn unset_protected(&mut self) {
+        self.protected = 0;
+    }
+}
+
+impl MemoryRegionKind for BootImage {
+    fn is_usable(&self) -> bool {
+        self.protected == 0 && self.usable == 1
+    }
+
+    fn is_reclaimable(&self) -> bool {
+        self.protected == 0
+    }
+}
+
+/// Type alias for a region within the boot image
+pub type BootImageRegion = MemoryRegion<BootImage>;
+
+/// Bump allocator state
+pub(crate) struct BumpAllocatorState<T: Into<PhysMemRegion> + Copy + 'static> {
+    pub phys_mem_layout: Option<&'static [T]>,
+    pub logical_mem_layout: Option<&'static [BootImageRegion]>,
+    pub base: usize,
+    pub head: usize,
+    pub remaining: usize,
+}
+
+impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocatorState<T> {
+    pub const fn new() -> Self {
+        BumpAllocatorState {
+            phys_mem_layout: None,
+            logical_mem_layout: None,
+            base: 0,
+            head: 0,
+            remaining: 0,
+        }
+    }
+}
+
+/**
+    Region-aware bump allocator
+
+    # Safety
+    This allocator assumes direct access to physical memory, meaning that
+    paging must either be disabled, or configured for identity-mapping.
+*/
 // - decide whether map entries should be copied or borrowed
-// - decide whether we need to know ACPI attributes (necessitating
-//   the use of `LongE820`)
 // - decide whether we need concurrency guarantees (we probably don't)
 // - decide whether we should account for paging (we probably don't,
 //   as memory is identity-mapped elsewhere in the pipeline)
 // TODO: finish prototype
-// FIXME: generalize, so that we aren't using x86-isms
-// TODO: use our novel "memory region descriptors", so that we
-//       don't need to know what "low memory area" is
-#[repr(C)]
 pub struct BumpAllocator<T: Into<PhysMemRegion> + Copy + 'static> {
-    _phys_mem_layout: UnsafeCell<Option<&'static [T]>>,
-    _logical_mem_layout: UnsafeCell<Option<&'static [LogicalMemRegion]>>,
-    _base: UnsafeCell<usize>,
-    _head: UnsafeCell<usize>,
-    _remaining: UnsafeCell<usize>,
+    state: Mutex<BumpAllocatorState<T>>,
 }
 
 impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
@@ -47,32 +123,29 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
     // - logical memory layout to be used in later revisions
     pub const fn new() -> Self {
         BumpAllocator {
-            _phys_mem_layout: UnsafeCell::new(None),
-            _logical_mem_layout: UnsafeCell::new(None),
-            _base: UnsafeCell::new(0),
-            _head: UnsafeCell::new(0),
-            _remaining: UnsafeCell::new(0),
+            state: Mutex::new(BumpAllocatorState::new()),
         }
     }
 
-    // Internal: obtain optional mutable reference to physical memory layout
-    pub fn phys_mem_layout(&self) -> &mut Option<&'static [T]> {
-        unsafe { &mut *self._phys_mem_layout.get() }
+    /**
+        Return base address of current memory region
+    */
+    pub fn base(&self) -> usize {
+        self.state.lock().base
     }
 
-    // Internal: obtain mutable reference to region base
-    pub fn base(&self) -> &mut usize {
-        unsafe { &mut *self._base.get() }
+    /**
+        Return allocator head address
+    */
+    pub fn head(&self) -> usize {
+        self.state.lock().head
     }
 
-    // Internal: obtain mutable reference to allocator head
-    pub fn head(&self) -> &mut usize {
-        unsafe { &mut *self._head.get() }
-    }
-
-    // Internal: obtain mutable reference to remaining region space
-    pub fn remaining(&self) -> &mut usize {
-        unsafe { &mut *self._remaining.get() }
+    /**
+        Return remaining region size
+    */
+    pub fn remaining(&self) -> usize {
+        self.state.lock().remaining
     }
 
     /**
@@ -92,7 +165,12 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         &self,
         phys_mem_layout: &'static [T],
         min_capacity: usize,
+        logical_mem_layout: &'static [BootImageRegion],
     ) -> Result<(), GenericError> {
+        // 0. Obtain handle to inner state
+        let mut state = self.state.lock();
+        state.logical_mem_layout = Some(logical_mem_layout);
+
         // 1. Use the provided logical memory layout
         // to locate a suitable physical memory region
         let mut candidate_region: Option<PhysMemRegion> = None;
@@ -101,8 +179,9 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         for &e in phys_mem_layout {
             let entry: PhysMemRegion = e.into();
 
-            // - skip LMA (region start below 1 MiB) and unavailable areas
-            if (entry.base() < (1 << 20)) || !entry.is_usable() {
+            // - skip areas that are either unusable, or those
+            //   that overlap with the boot image
+            if !entry.kind().is_usable() || logical_mem_layout.iter().any(|r| entry.overlaps(r)) {
                 continue;
             }
 
@@ -121,7 +200,7 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
             let region_base = region.base() as usize;
             let region_size = region.size() as usize;
 
-            *self.base() = region_base;
+            state.base = region_base;
 
             // For sanity's sake, align base to 16 bytes
             let padding = round_addr(region_base, 16) - region_base;
@@ -138,9 +217,9 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
             let new_size = (region_size - padding) as usize;
 
             // Store aligned head and adjusted region size
-            *self.head() = new_head;
-            *self.remaining() = new_size;
-            *self.phys_mem_layout() = Some(phys_mem_layout);
+            state.head = new_head;
+            state.remaining = new_size;
+            state.phys_mem_layout = Some(phys_mem_layout);
         } else {
             return Err(GenericError::ErrorMessage(
                 "no suitable region for allocator base was found",
@@ -150,7 +229,7 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         // 4. Perform sanity check
         // - the base should NEVER be equal to zero, as we have
         //   been searching look
-        if *self.base() == 0 || *self.head() == 0 || *self.remaining() == 0 {
+        if state.base == 0 || state.head == 0 || state.remaining == 0 {
             return Err(GenericError::ErrorMessage(
                 "no changes were made to the allocator state",
             ));
@@ -165,17 +244,24 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
 //       don't need to know what "low memory area" is
 unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocator<T> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // Obtain handle to inner state
+        let mut state = self.state.lock();
+
         // Do not proceed if the allocator has not been initialized
-        if self.phys_mem_layout().is_none() {
+        if state.phys_mem_layout.is_none() || state.logical_mem_layout.is_none() {
             return null_mut();
         }
+
+        // Unwrap the maybe-references
+        let phys_mem_layout = state.phys_mem_layout.unwrap();
+        let logical_mem_layout = state.logical_mem_layout.unwrap();
 
         // Obtain requested region size and alignment
         let req_size = layout.size();
         let req_align = layout.align();
 
         // Calculate aligned head
-        let mut req_head = round_addr(*self.head(), req_align);
+        let mut req_head = round_addr(state.head, req_align);
 
         // - since zero-size allocations are allowed, handle it
         if req_size == 0 {
@@ -185,16 +271,16 @@ unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocat
         // Keep track of the old head
         // - `self.head` should be greater
         //    than the old head on success
-        let old_head = *self.head();
+        let old_head = state.head;
 
         // First-pass heuristic:
         // Can we still allocate within the current region,
         // subject to alignment requirements?
         let padding = req_head - old_head;
-        if req_size + padding < *self.remaining() {
+        if req_size + padding < state.remaining {
             // If so, EASY! perform a trivial "bump"
-            *self.remaining() -= req_size + padding;
-            *self.head() = req_head + req_size;
+            state.remaining -= req_size + padding;
+            state.head = req_head + req_size;
             return req_head as *mut u8;
         }
 
@@ -203,7 +289,7 @@ unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocat
         // - are clearly unusable
         // - are clearly below the current base
         // - are split between "usable" and "non-usable"
-        for &e in self.phys_mem_layout().unwrap() {
+        for &e in phys_mem_layout {
             let entry: PhysMemRegion = e.into();
 
             // Memory region properties
@@ -212,13 +298,18 @@ unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocat
             let mem_end = mem_base + mem_size;
             let mem_pad = round_addr(mem_base, req_align) - mem_base;
 
+            // - rule out those that overlap with the boot image
+            if logical_mem_layout.iter().any(|r| entry.overlaps(r)) {
+                continue;
+            }
+
             // - rule out "past" regions
-            if mem_base < *self.base() {
+            if mem_base < state.base {
                 continue;
             }
 
             // - rule out regions that are clearly unusable
-            if mem_size < req_size + mem_pad || !entry.is_usable() {
+            if mem_size <= req_size + mem_pad || !entry.kind().is_usable() {
                 continue;
             }
 
@@ -228,13 +319,13 @@ unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocat
             //   subject to alignment requirements
             if req_head + req_size < mem_base {
                 // - store region base
-                *self.base() = mem_base;
+                state.base = mem_base;
 
                 // - calculate new candidate base
                 req_head = mem_base + mem_pad;
 
                 // - calculate new capacity
-                *self.remaining() = mem_size - mem_pad;
+                state.remaining = mem_size - mem_pad;
             }
 
             // - if the requested region is clearly contained
@@ -243,8 +334,9 @@ unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocat
             //   base by the requested size + padding
             if req_head >= mem_base && mem_end >= req_head + req_size {
                 // Bump base and capacity
-                *self.head() = req_head + req_size;
-                *self.remaining() -= req_size;
+                // FIXME: potential correctness issue here
+                state.head = req_head + req_size;
+                state.remaining -= req_size + mem_pad;
                 break;
             }
         }
@@ -252,7 +344,7 @@ unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocat
         // Return candidate base only if `self.base`
         // has changed values. Otherwise, return
         // a null pointer.
-        if *self.head() > old_head {
+        if state.head > old_head {
             req_head as *mut u8
         } else {
             null_mut()

@@ -34,6 +34,17 @@ clean_all: clean
 	cargo clean --manifest-path $(KERN_RS_MANIFEST)
 	cargo clean --manifest-path $(COMMON_RS_MANIFEST)
 
+doc_boot: $(shell find $(BOOT_SRC) -type f -name '*.rs')
+	cargo +nightly doc \
+		--open \
+		--document-private-items \
+		--manifest-path $(BOOT_RS_MANIFEST) \
+
+doc_common: $(shell find $(COMMON_SRC) -type f -name '*.rs')
+	cargo +nightly doc \
+		--open \
+		--manifest-path $(COMMON_RS_MANIFEST)
+
 bootimg: $(BUILD_DIR)/boot.img
 
 debug_boot: $(BUILD_DIR)/boot.img
@@ -72,8 +83,7 @@ $(BOOT_RS_DIR)/libboot.a: $(shell find $(BOOT_SRC) $(COMMON_SRC) -type f -name '
 		--manifest-path $(BOOT_RS_MANIFEST) \
 		--crate-type=staticlib \
 		$(BOOT_RS_CARGOFLAGS) \
-		-- --emit=obj \
-		$(BOOT_RS_RUSTCFLAGS)
+		-- $(BOOT_RS_RUSTCFLAGS)
 
 $(BUILD_DIR)/boot64.o: $(BUILD_DIR)/stub64.o $(BOOT_RS_DIR)/libboot.a
 	ld $(BOOT64_LDFLAGS) $^ -o $@
@@ -81,4 +91,4 @@ $(BUILD_DIR)/boot64.o: $(BUILD_DIR)/stub64.o $(BOOT_RS_DIR)/libboot.a
 $(BUILD_DIR)/boot1.bin: $(BUILD_DIR)/stub32.o $(BUILD_DIR)/boot64.o
 	ld $(BOOT1_LDFLAGS) $^ -o $@
 
-.PHONY: all clean bootimg debug_boot
+.PHONY: all clean bootimg debug_boot doc_boot

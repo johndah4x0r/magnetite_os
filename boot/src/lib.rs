@@ -1,3 +1,8 @@
+/*!
+    Crate defining the Rust component of the bootloader
+    `magnetite_os/boot`
+*/
+
 #![no_std]
 #![no_main]
 
@@ -19,14 +24,23 @@ use common::shared::structs::array_like::ArrayLike;
 use common::shared::structs::spin_lock::Mutex;
 use common::shared::structs::volatile::VolatileCell;
 
-mod allocator;
-use allocator::BumpAllocator;
+// - expose allocator module
+pub mod allocator;
+use allocator::{BootImage, BootImageRegion, BumpAllocator};
 
 // - BIOS-specific structures
 use common::plat::pc_bios::structs::{BiosPB, LongE820};
 use common::plat::pc_bios::vga::console;
 use common::plat::pc_bios::vesa::ScreenInfo;
 use console::VgaConsole;
+
+// Boot image layout
+// - for now, it only covers the LMA on the x86
+static BOOT_IMAGE_LAYOUT: [BootImageRegion; 1] = [BootImageRegion::new(
+    0,
+    1 << 20,
+    BootImage::new(true, false),
+)];
 
 // Double-panic message
 static MSG_DOUBLE_PANIC: &'static str =
@@ -48,7 +62,7 @@ static VGA_CONSOLE: Mutex<VgaConsole> = Mutex::new(unsafe { VgaConsole::defaults
 // TODO
 #[inline(never)]
 #[unsafe(no_mangle)]
-pub extern "C" fn _start(
+extern "C" fn _start(
     bios_pb: &'static BiosPB,
     bootdev: u64,
     e820_map_desc: &'static ArrayLike<'static, LongE820>,
@@ -88,7 +102,7 @@ fn main(
     screen_info: &'static ScreenInfo,
 ) -> Result<(), GenericError> {
     // Initialize allocator
-    ALLOCATOR.init(e820_map, 0)?;
+    ALLOCATOR.init(e820_map, 0, &BOOT_IMAGE_LAYOUT)?;
 
     // Obtain lock handle
     let mut handle = VGA_CONSOLE.lock();
@@ -190,9 +204,9 @@ fn main(
     writeln!(
         &mut handle,
         "\t0x{:0>16x}\t0x{:0>16x}\t0x{:0>16x}",
-        *ALLOCATOR.base(),
-        *ALLOCATOR.head(),
-        *ALLOCATOR.remaining()
+        ALLOCATOR.base(),
+        ALLOCATOR.head(),
+        ALLOCATOR.remaining()
     )?;
     handle.flush()?;
 
@@ -210,9 +224,9 @@ fn main(
     writeln!(
         &mut handle,
         "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}",
-        *ALLOCATOR.base(),
-        *ALLOCATOR.head(),
-        *ALLOCATOR.remaining()
+        ALLOCATOR.base(),
+        ALLOCATOR.head(),
+        ALLOCATOR.remaining()
     )?;
 
     handle.flush()?;
@@ -233,6 +247,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
 // Routine for fetching the value of
 // `PANIC_FLAG`, then incremenitng it
 #[inline(always)]
+#[doc(hidden)]
 fn panic_fetch_add() -> usize {
     PANIC_FLAG.fetch_add(1, Ordering::SeqCst)
 }
@@ -240,6 +255,7 @@ fn panic_fetch_add() -> usize {
 // Routine for first panic invocation
 // TODO: decide whether to assume control over the console
 #[inline(always)]
+#[doc(hidden)]
 fn single_panic(info: &PanicInfo<'_>) -> ! {
     // 1. forcibly unlock the console, if necessary
     unsafe {
@@ -297,6 +313,7 @@ fn single_panic(info: &PanicInfo<'_>) -> ! {
 // TODO: make this less MacGyver-like, now
 // that `VgaConsole` is relatively stable
 #[inline(always)]
+#[doc(hidden)]
 fn double_panic(_info: &PanicInfo<'_>) -> ! {
     // 1. create a window into the default VGA text buffer
     // - don't try to be smart here
@@ -326,6 +343,7 @@ fn double_panic(_info: &PanicInfo<'_>) -> ! {
 // Routine for third panic invocation
 // TODO: consider resetting the system
 #[inline(always)]
+#[doc(hidden)]
 fn triple_panic(_info: &PanicInfo<'_>) -> ! {
     freeze();
 }

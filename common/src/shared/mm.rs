@@ -1,5 +1,5 @@
 /*!
-    Definitions relevant to memory management
+    Definitions relevant to memory mapping and management
 
     This module doesn't implement memory management *per se*, but rather
     expose definitions that assist in implementing it elsewhere, as it
@@ -12,6 +12,18 @@
     Also, what in the Java is this abomination!?
 */
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+pub enum PhysMemClass {
+    Invalid = 0,
+    Regular = 1,
+    Reserved = 2,
+    Reclaimable = 3,
+    NonVolatile = 4,
+    Hole = 5,
+    Other = 6,
+}
+
 /**
     Platform-agnostic classification of a region in physical memory
 
@@ -20,53 +32,76 @@
     typically found in the PC/BIOS platform, though their presence
     or use isn't strictly limited to that platform.
 
-    # Semantics
-    For variants with an `Option<usize>` field, one may use
-    `Some(attr)`, where `attr` is the platform-specific
-    attributes bit-field. *This is primarily to maintain
-    mental compatibility with the PC/BIOS platform, and may
-    be generalized to a platform-agnostic contract in the
-    near future.*
+    # Usage
+    This type is immutable and state-poor by design, as it would
+    be unsafe to directly manipulate memory map entries provided
+    by the firmware.
+
+    If one really wants to manipulate a particular entry, then
+    one has to overwrite the old instance with a new instance.
 */
-#[non_exhaustive]
+
+// - not sure whether `bool` is truly FFI-safe... might use
+//   `usize` later...
 #[derive(Clone, Copy, Debug)]
-pub enum PhysMemKind {
-    Regular,
-    Hole,
-    Reclaimable(Option<usize>),
-    Reserved(Option<usize>),
-    NonVolatile(Option<usize>),
-    Other(Option<usize>),
+#[repr(C)]
+pub struct PhysMemKind {
+    _class: PhysMemClass,
+    raw_attr: usize,
+    has_attr: usize,
 }
 
-/**
-    Platform-agnostic classification of a logical memory region
+impl PhysMemKind {
+    pub const fn new(class: PhysMemClass, attr: Option<usize>) -> Self {
+        // - ooo... spooky ABI guarantees...
+        let has_attr: usize = if attr.is_some() { 1 } else { 0 };
+        let raw_attr: usize = match attr {
+            Some(a) => a,
+            None => 0,
+        };
 
-    # Background
-    This abstraction is primarily inspired by the region classes
-    typically found in the PC/BIOS platform, though their presence
-    or use isn't strictly limited to that platform.
+        PhysMemKind {
+            _class: class,
+            raw_attr,
+            has_attr,
+        }
+    }
 
-    # Semantics
-    The internal structure and semantics for this type is currently
-    being developed. As such, one should instead provide an alternative
-    descriptor type that implements [`MemoryRegionKind`], at least for
-    the time being.
-*/
-// - not quite sure how to use `Mapped` and `Unmapped`, but
-//   `SysImg` is certainly useful for preventing self-overwrites
-// - should not be used in applications that require more
-//   fine-grained bookkeeping (like mature kernels)
-// TODO: turn this fella into a state machine of sorts
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LogicalMemKind {
-    Mapped,
-    Unmapped,
-    SysImg,
-    Reserved,
-    Faulting,
-    Other,
+    pub const fn regular() -> Self {
+        Self::new(PhysMemClass::Regular, None)
+    }
+
+    pub const fn reserved(attr: Option<usize>) -> Self {
+        Self::new(PhysMemClass::Reserved, attr)
+    }
+
+    pub const fn reclaimable(attr: Option<usize>) -> Self {
+        Self::new(PhysMemClass::Reclaimable, attr)
+    }
+
+    pub const fn non_volatile(attr: Option<usize>) -> Self {
+        Self::new(PhysMemClass::NonVolatile, attr)
+    }
+
+    pub const fn hole() -> Self {
+        Self::new(PhysMemClass::Hole, None)
+    }
+
+    pub const fn other(attr: Option<usize>) -> Self {
+        Self::new(PhysMemClass::Other, attr)
+    }
+
+    pub fn class(&self) -> PhysMemClass {
+        self._class
+    }
+
+    pub fn attr(&self) -> Option<usize> {
+        if self.has_attr == 1 {
+            Some(self.raw_attr)
+        } else {
+            None
+        }
+    }
 }
 
 /**
@@ -79,27 +114,11 @@ pub trait MemoryRegionKind {
 
 impl MemoryRegionKind for PhysMemKind {
     fn is_usable(&self) -> bool {
-        match *self {
-            PhysMemKind::Regular => true,
-            _ => false,
-        }
+        self.class() == PhysMemClass::Regular
     }
 
     fn is_reclaimable(&self) -> bool {
-        match *self {
-            PhysMemKind::Reclaimable(_) => true,
-            _ => false,
-        }
-    }
-}
-
-impl MemoryRegionKind for LogicalMemKind {
-    fn is_usable(&self) -> bool {
-        *self == LogicalMemKind::Mapped
-    }
-
-    fn is_reclaimable(&self) -> bool {
-        *self == LogicalMemKind::Unmapped
+        self.class() == PhysMemClass::Reclaimable
     }
 }
 
@@ -118,6 +137,7 @@ impl MemoryRegionKind for LogicalMemKind {
     adhere to ACPI specifications.
 */
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct MemoryRegion<K: MemoryRegionKind> {
     _base: usize,
     _size: usize,
@@ -183,27 +203,18 @@ impl<K: MemoryRegionKind> MemoryRegion<K> {
 
     /**
         Returns a mutable reference to the memory kind descriptor
+
+        # Safety
+        Manipulating a memory kind descriptor may be unsafe, depending
+        on the type of memory being described.
+
+        For instance, directly lying about physical memory is almost
+        certainly unsafe, which is why manipulating physical memory
+        region descriptors is highly discouraged (see [`PhysMemKind`]).
     */
     pub fn kind_mut(&mut self) -> &mut K {
         &mut self._kind
     }
-
-    /**
-        Checks whether the described region is usable,
-        and returns a truth value
-    */
-    pub fn is_usable(&self) -> bool {
-        self.kind().is_usable()
-    }
-
-    /**
-        Checks whether the described region is reclaimable,
-        and returns a truth value
-    */
-    pub fn is_reclaimable(&self) -> bool {
-        self.kind().is_reclaimable()
-    }
-
 
     /**
         Checks whether the described region contains the
@@ -217,7 +228,7 @@ impl<K: MemoryRegionKind> MemoryRegion<K> {
         Checks whether the described region overlaps with the
         provded region, and returns a truth value
     */
-    pub fn overlaps(&self, other: &Self) -> bool {
+    pub fn overlaps<J: MemoryRegionKind>(&self, other: &MemoryRegion<J>) -> bool {
         self.base() < other.limit() && other.base() < self.limit()
     }
 
@@ -225,7 +236,7 @@ impl<K: MemoryRegionKind> MemoryRegion<K> {
         Checks whether the provided region is fully contained
         within the described region, and returns a truth value
     */
-    pub fn contains(&self, other: &Self) -> bool {
+    pub fn contains<J: MemoryRegionKind>(&self, other: &MemoryRegion<J>) -> bool {
         self.base() <= other.base() && other.limit() <= self.limit()
     }
 
@@ -248,6 +259,3 @@ impl<K: MemoryRegionKind> MemoryRegion<K> {
 
 /// Type alias for a physical memory region
 pub type PhysMemRegion = MemoryRegion<PhysMemKind>;
-
-/// Type alias for a logical memory region
-pub type LogicalMemRegion = MemoryRegion<LogicalMemKind>;
