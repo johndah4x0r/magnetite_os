@@ -4,6 +4,8 @@
 
 use core::ptr;
 
+use crate::shared::mm::{PhysMemKind, PhysMemRegion};
+
 /// Short (20 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
 // - this can be represented normally, as we
@@ -51,6 +53,22 @@ impl From<LongE820> for ShortE820 {
     }
 }
 
+impl From<ShortE820> for PhysMemRegion {
+    fn from(value: ShortE820) -> PhysMemRegion {
+        let base = value.base() as usize;
+        let size = value.size() as usize;
+        let kind = match value.area_type() {
+            1 => PhysMemKind::Regular,
+            2 => PhysMemKind::Reserved(None),
+            3 => PhysMemKind::Reclaimable(None),
+            4 => PhysMemKind::NonVolatile(None),
+            _ => PhysMemKind::Other(None),
+        };
+
+        PhysMemRegion::new(base, size, kind)
+    }
+}
+
 /// Long (24 B) E820 entry
 // - expect little-endian encoding (x86-exclusive)
 // - this can be represented normally
@@ -82,6 +100,23 @@ impl LongE820 {
     /// Return ACPI attributes
     pub const fn acpi_attr(&self) -> u32 {
         (self._area_type_attr >> 32) as u32
+    }
+}
+
+impl From<LongE820> for PhysMemRegion {
+    fn from(value: LongE820) -> PhysMemRegion {
+        let base = value.base() as usize;
+        let size = value.size() as usize;
+        let attr = value.acpi_attr() as usize;
+        let kind = match value.area_type() {
+            1 => PhysMemKind::Regular,
+            2 => PhysMemKind::Reserved(Some(attr)),
+            3 => PhysMemKind::Reclaimable(Some(attr)),
+            4 => PhysMemKind::NonVolatile(Some(attr)),
+            _ => PhysMemKind::Other(Some(attr)),
+        };
+
+        PhysMemRegion::new(base, size, kind)
     }
 }
 

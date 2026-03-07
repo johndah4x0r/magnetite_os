@@ -4,7 +4,7 @@
 // Definition uses
 use core::hint;
 use core::panic::PanicInfo;
-use core::slice::{from_raw_parts, from_raw_parts_mut};
+use core::slice::from_raw_parts;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[macro_use]
@@ -178,6 +178,44 @@ fn main(
     // Commit changes
     handle.flush()?;
 
+    // Dump allocator state
+    writeln!(
+        &mut handle,
+        " I: Allocator location: {:?}",
+        &ALLOCATOR as *const _
+    )?;
+
+    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
+
+    writeln!(
+        &mut handle,
+        "\t0x{:0>16x}\t0x{:0>16x}\t0x{:0>16x}",
+        *ALLOCATOR.base(),
+        *ALLOCATOR.head(),
+        *ALLOCATOR.remaining()
+    )?;
+    handle.flush()?;
+
+    freeze();
+
+    // Instantiate vector and loop from it
+    let v: Vec<usize> = vec![1, 2, 3, 5, 8, 13, 21, 36];
+
+    for i in v.iter() {
+        writeln!(&mut handle, " >  Vector entry: {}", i)?;
+    }
+
+    // Dump allocator state again
+    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
+    writeln!(
+        &mut handle,
+        "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}",
+        *ALLOCATOR.base(),
+        *ALLOCATOR.head(),
+        *ALLOCATOR.remaining()
+    )?;
+
+    handle.flush()?;
     Ok(())
 }
 

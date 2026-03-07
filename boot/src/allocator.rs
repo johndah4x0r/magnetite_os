@@ -4,8 +4,8 @@ use core::cell::UnsafeCell;
 use core::ptr::null_mut;
 
 // Internal definitions
-use common::plat::pc_bios::structs::ShortE820;
 use common::shared::GenericError;
+use common::shared::mm::{LogicalMemRegion, PhysMemRegion};
 
 // Helper routine: round up given address to the nearest aligned address
 #[inline(always)]
@@ -22,34 +22,42 @@ fn round_addr(base: usize, align: usize) -> usize {
 // - decide whether we need to know ACPI attributes (necessitating
 //   the use of `LongE820`)
 // - decide whether we need concurrency guarantees (we probably don't)
+// - decide whether we should account for paging (we probably don't,
+//   as memory is identity-mapped elsewhere in the pipeline)
 // TODO: finish prototype
 // FIXME: generalize, so that we aren't using x86-isms
-#[repr(C, align(4096))]
-pub struct BumpAllocator<T: Into<ShortE820> + Copy + 'static> {
-    _mem_layout: UnsafeCell<Option<&'static [T]>>,
+// TODO: use our novel "memory region descriptors", so that we
+//       don't need to know what "low memory area" is
+#[repr(C)]
+pub struct BumpAllocator<T: Into<PhysMemRegion> + Copy + 'static> {
+    _phys_mem_layout: UnsafeCell<Option<&'static [T]>>,
+    _logical_mem_layout: UnsafeCell<Option<&'static [LogicalMemRegion]>>,
     _base: UnsafeCell<usize>,
     _head: UnsafeCell<usize>,
     _remaining: UnsafeCell<usize>,
 }
 
-impl<T: Into<ShortE820> + Copy + 'static> BumpAllocator<T> {
+impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
     /**
         Create new instance of `BumpAllocator`
 
         May only be invoked once under `#[global_allocator]`
     */
+
+    // - logical memory layout to be used in later revisions
     pub const fn new() -> Self {
         BumpAllocator {
-            _mem_layout: UnsafeCell::new(None),
+            _phys_mem_layout: UnsafeCell::new(None),
+            _logical_mem_layout: UnsafeCell::new(None),
             _base: UnsafeCell::new(0),
             _head: UnsafeCell::new(0),
             _remaining: UnsafeCell::new(0),
         }
     }
 
-    // Internal: obtain optional mutable reference to memory layout
-    pub fn mem_layout(&self) -> &mut Option<&'static [T]> {
-        unsafe { &mut *self._mem_layout.get() }
+    // Internal: obtain optional mutable reference to physical memory layout
+    pub fn phys_mem_layout(&self) -> &mut Option<&'static [T]> {
+        unsafe { &mut *self._phys_mem_layout.get() }
     }
 
     // Internal: obtain mutable reference to region base
@@ -76,20 +84,25 @@ impl<T: Into<ShortE820> + Copy + 'static> BumpAllocator<T> {
 
         # Safety
         Although this function is safe to call, it is the caller's
-        responsibility to make sure that `mem_layout` points to a
+        responsibility to make sure that `phys_mem_layout` points to a
         valid memory layout, and that the entries genuinely reflect
         the system's current memory state (memory map, paging, etc.)
     */
-    pub fn init(&self, mem_layout: &'static [T], min_capacity: usize) -> Result<(), GenericError> {
-        // 2. Locate the first available area above 1 MiB
-        let mut candidate_region: Option<ShortE820> = None;
+    pub fn init(
+        &self,
+        phys_mem_layout: &'static [T],
+        min_capacity: usize,
+    ) -> Result<(), GenericError> {
+        // 1. Use the provided logical memory layout
+        // to locate a suitable physical memory region
+        let mut candidate_region: Option<PhysMemRegion> = None;
 
         // - perform linear search, skipping the LMA
-        for &e in mem_layout {
-            let entry: ShortE820 = e.into();
+        for &e in phys_mem_layout {
+            let entry: PhysMemRegion = e.into();
 
             // - skip LMA (region start below 1 MiB) and unavailable areas
-            if (entry.base() < (1 << 20)) || entry.area_type() != 1 {
+            if (entry.base() < (1 << 20)) || !entry.is_usable() {
                 continue;
             }
 
@@ -104,7 +117,7 @@ impl<T: Into<ShortE820> + Copy + 'static> BumpAllocator<T> {
         // 3. Set allocator base
         // - if no suitable region was found, panic (why though?)
         if let Some(r) = candidate_region {
-            let region: ShortE820 = r.into();
+            let region: PhysMemRegion = r.into();
             let region_base = region.base() as usize;
             let region_size = region.size() as usize;
 
@@ -127,7 +140,7 @@ impl<T: Into<ShortE820> + Copy + 'static> BumpAllocator<T> {
             // Store aligned head and adjusted region size
             *self.head() = new_head;
             *self.remaining() = new_size;
-            *self.mem_layout() = Some(mem_layout);
+            *self.phys_mem_layout() = Some(phys_mem_layout);
         } else {
             return Err(GenericError::ErrorMessage(
                 "no suitable region for allocator base was found",
@@ -148,10 +161,12 @@ impl<T: Into<ShortE820> + Copy + 'static> BumpAllocator<T> {
 }
 
 // TODO REVIEW + FIXME: WTF is this madness!?
-unsafe impl<T: Into<ShortE820> + Copy + 'static> GlobalAlloc for BumpAllocator<T> {
+// TODO: use our novel "memory region descriptors", so that we
+//       don't need to know what "low memory area" is
+unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocator<T> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // Do not proceed if the allocator has not been initialized
-        if self.mem_layout().is_none() {
+        if self.phys_mem_layout().is_none() {
             return null_mut();
         }
 
@@ -188,11 +203,10 @@ unsafe impl<T: Into<ShortE820> + Copy + 'static> GlobalAlloc for BumpAllocator<T
         // - are clearly unusable
         // - are clearly below the current base
         // - are split between "usable" and "non-usable"
-        for &e in self.mem_layout().unwrap() {
-            let entry: ShortE820 = e.into();
+        for &e in self.phys_mem_layout().unwrap() {
+            let entry: PhysMemRegion = e.into();
 
             // Memory region properties
-            let mem_type = entry.area_type() as usize;
             let mem_base = entry.base() as usize;
             let mem_size = entry.size() as usize;
             let mem_end = mem_base + mem_size;
@@ -204,7 +218,7 @@ unsafe impl<T: Into<ShortE820> + Copy + 'static> GlobalAlloc for BumpAllocator<T
             }
 
             // - rule out regions that are clearly unusable
-            if mem_size < req_size + mem_pad || mem_type != 1 {
+            if mem_size < req_size + mem_pad || !entry.is_usable() {
                 continue;
             }
 
@@ -250,5 +264,5 @@ unsafe impl<T: Into<ShortE820> + Copy + 'static> GlobalAlloc for BumpAllocator<T
     }
 }
 
-unsafe impl<T: Into<ShortE820> + Copy + 'static> Sync for BumpAllocator<T> {}
-unsafe impl<T: Into<ShortE820> + Copy + 'static> Send for BumpAllocator<T> {}
+unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> Sync for BumpAllocator<T> {}
+unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> Send for BumpAllocator<T> {}

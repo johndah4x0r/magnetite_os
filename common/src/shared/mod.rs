@@ -23,6 +23,9 @@ pub mod traits;
 // Sanitized I/O definitions
 pub mod io;
 
+// Memory management definitions
+pub mod mm;
+
 /**
     A finite set of error types
 
