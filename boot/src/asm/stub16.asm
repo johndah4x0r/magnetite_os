@@ -178,7 +178,7 @@ init_bss:
  
 ; Set video mode
 set_video_mode:
-    ;jmp .default                            ; FIXME: skip scanning (for testing purposes)
+    jmp .default                            ; FIXME: skip scanning (for testing purposes)
     jmp .main                               ; skip embedded locals
 .segment:
     dw 0

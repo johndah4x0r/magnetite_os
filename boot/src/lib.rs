@@ -30,8 +30,8 @@ use allocator::{BootImage, BootImageRegion, BumpAllocator};
 
 // - BIOS-specific structures
 use common::plat::pc_bios::structs::{BiosPB, LongE820};
-use common::plat::pc_bios::vga::console;
 use common::plat::pc_bios::vesa::ScreenInfo;
+use common::plat::pc_bios::vga::console;
 use console::VgaConsole;
 
 // Boot image layout
@@ -189,9 +189,6 @@ fn main(
         e820_map.len(),
     )?;
 
-    // Commit changes
-    handle.flush()?;
-
     // Dump allocator state
     writeln!(
         &mut handle,
@@ -199,18 +196,10 @@ fn main(
         &ALLOCATOR as *const _
     )?;
 
-    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
-
-    writeln!(
-        &mut handle,
-        "\t0x{:0>16x}\t0x{:0>16x}\t0x{:0>16x}",
-        ALLOCATOR.base(),
-        ALLOCATOR.head(),
-        ALLOCATOR.remaining()
-    )?;
+    // Commit changes
     handle.flush()?;
 
-    freeze();
+    //freeze();
 
     // Instantiate vector and loop from it
     let v: Vec<usize> = vec![1, 2, 3, 5, 8, 13, 21, 36];
@@ -218,16 +207,6 @@ fn main(
     for i in v.iter() {
         writeln!(&mut handle, " >  Vector entry: {}", i)?;
     }
-
-    // Dump allocator state again
-    writeln!(&mut handle, " I: Allocator state (base / head / capacity):")?;
-    writeln!(
-        &mut handle,
-        "\t0x{:0>16x}\t0x{:0>16x}\t{:0>16x}",
-        ALLOCATOR.base(),
-        ALLOCATOR.head(),
-        ALLOCATOR.remaining()
-    )?;
 
     handle.flush()?;
     Ok(())

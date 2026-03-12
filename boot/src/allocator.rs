@@ -15,7 +15,7 @@ use core::ptr::null_mut;
 
 // Internal definitions
 use common::shared::GenericError;
-use common::shared::mm::{MemoryRegion, MemoryRegionKind, PhysMemRegion};
+use common::shared::mm::{MemoryRegion, MemoryRegionKind, PhysMemRegion, RegionSpan};
 use common::shared::structs::spin_lock::Mutex;
 
 // Helper routine: round up given address to the nearest aligned address
@@ -78,27 +78,99 @@ pub type BootImageRegion = MemoryRegion<BootImage>;
 
 /// Bump allocator state
 pub(crate) struct BumpAllocatorState<T: Into<PhysMemRegion> + Copy + 'static> {
-    pub phys_mem_layout: Option<&'static [T]>,
-    pub logical_mem_layout: Option<&'static [BootImageRegion]>,
-    pub base: usize,
-    pub head: usize,
-    pub remaining: usize,
+    pub phys_mem_layout: &'static [T],
+    pub logical_mem_layout: &'static [BootImageRegion],
+    pub current_arena: RegionSpan,
 }
 
 impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocatorState<T> {
-    pub const fn new() -> Self {
-        BumpAllocatorState {
-            phys_mem_layout: None,
-            logical_mem_layout: None,
-            base: 0,
-            head: 0,
-            remaining: 0,
+    /**
+        (internal) Locate new arena using the provided
+        request parameters
+    */
+    pub(crate) fn locate_new_arena(&mut self, req_size: usize, req_align: usize) -> Result<(), ()> {
+        // Obtain inner descriptors
+        let phys_mem_layout = self.phys_mem_layout;
+        let logical_mem_layout = self.logical_mem_layout;
+
+        // - copy old arena descriptor
+        let mut current_arena = self.current_arena;
+        let mut new_arena: Option<RegionSpan> = None;
+
+        // Locate new arena, ruling out physical regions that
+        // - are clearly unusable
+        // - are clearly below the current base
+        // - are split between "usable" and "non-usable"
+        for &e in phys_mem_layout {
+            let entry: PhysMemRegion = e.into();
+            let entry_span = entry.span();
+
+            // Obtain region base and padding size
+            let mem_base = entry_span.base();
+            let mem_size = entry_span.size();
+            let mem_pad = round_addr(mem_base, req_align) - mem_base;
+
+            // - rule out those that overlap with the boot image
+            if logical_mem_layout
+                .iter()
+                .any(|r| entry_span.overlaps(r.span()))
+            {
+                continue;
+            }
+
+            // - rule out "past" regions
+            if entry_span.is_below(&current_arena) {
+                continue;
+            }
+
+            // - rule out regions that are either too small
+            //   or aren't explicitly declared as "usable"
+            if entry_span.size() <= req_size + mem_pad || !entry.kind().is_usable() {
+                continue;
+            }
+
+            // - if the requested region is clearly below
+            //   the current memory region, then use the
+            //   memory region's base as the candidate base,
+            //   subject to alignment requirements
+            if current_arena.is_below(entry.span()) {
+                // - align entry base, then
+                // break the loop
+                new_arena = Some(RegionSpan::new(mem_base + mem_pad, mem_size - mem_pad));
+
+                break;
+            }
+        }
+
+        if let Some(a) = new_arena {
+            // - store new arena
+            self.current_arena = a;
+
+            // - return `Ok(())`
+            Ok(())
+        } else {
+            // - possible OOM; return `Err(())`
+            Err(())
         }
     }
 }
 
 /**
     Region-aware bump allocator
+
+    # Semantics
+    The allocator state is private and stored behind a mutex lock.
+    Allocations may therefore block. This is so that the allocator
+    state is changed atomically.
+
+    If the current arena satisfies the requested layout, allocation
+    proceeds as usual: head pointer is "bumped", and capacity is
+    decremented. If not, then the arena is considered to be *exhausted*,
+    and the allocator performs a first-fit search over physical memory
+    regions that
+    - are "above" the current arena, and
+    - are large enough to accomodate the requested layout, subject
+      to alignment requirements
 
     # Safety
     This allocator assumes direct access to physical memory, meaning that
@@ -110,7 +182,7 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocatorState<T> {
 //   as memory is identity-mapped elsewhere in the pipeline)
 // TODO: finish prototype
 pub struct BumpAllocator<T: Into<PhysMemRegion> + Copy + 'static> {
-    state: Mutex<BumpAllocatorState<T>>,
+    state: Mutex<Option<BumpAllocatorState<T>>>,
 }
 
 impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
@@ -123,29 +195,8 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
     // - logical memory layout to be used in later revisions
     pub const fn new() -> Self {
         BumpAllocator {
-            state: Mutex::new(BumpAllocatorState::new()),
+            state: Mutex::new(None),
         }
-    }
-
-    /**
-        Return base address of current memory region
-    */
-    pub fn base(&self) -> usize {
-        self.state.lock().base
-    }
-
-    /**
-        Return allocator head address
-    */
-    pub fn head(&self) -> usize {
-        self.state.lock().head
-    }
-
-    /**
-        Return remaining region size
-    */
-    pub fn remaining(&self) -> usize {
-        self.state.lock().remaining
     }
 
     /**
@@ -154,6 +205,11 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         # Usage
         One can set `min_capacity = 0` to select whatever available
         region that is first encountered in the memory layout.
+
+        # Semantics
+        The allocator state is queried, and then initialized, atomically:
+        no changes will be made to it until an iniitial state has been
+        successfully calculated.
 
         # Safety
         Although this function is safe to call, it is the caller's
@@ -168,8 +224,14 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         logical_mem_layout: &'static [BootImageRegion],
     ) -> Result<(), GenericError> {
         // 0. Obtain handle to inner state
-        let mut state = self.state.lock();
-        state.logical_mem_layout = Some(logical_mem_layout);
+        let mut inner = self.state.lock();
+
+        // - do not proceed if the allocator is already initialized
+        if inner.is_some() {
+            return Err(GenericError::ErrorMessage(
+                "attempted to initialize allocator more than once",
+            ));
+        }
 
         // 1. Use the provided logical memory layout
         // to locate a suitable physical memory region
@@ -178,16 +240,21 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         // - perform linear search, skipping the LMA
         for &e in phys_mem_layout {
             let entry: PhysMemRegion = e.into();
+            let entry_span = entry.span();
 
             // - skip areas that are either unusable, or those
             //   that overlap with the boot image
-            if !entry.kind().is_usable() || logical_mem_layout.iter().any(|r| entry.overlaps(r)) {
+            if !entry.kind().is_usable()
+                || logical_mem_layout
+                    .iter()
+                    .any(|r| entry_span.overlaps(r.span()))
+            {
                 continue;
             }
 
             // - store the first candidate region
             // larger than or equal to `min_capacity`
-            if entry.size() as usize >= min_capacity {
+            if entry_span.size() >= min_capacity {
                 candidate_region = Some(entry);
                 break;
             }
@@ -197,10 +264,8 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         // - if no suitable region was found, panic (why though?)
         if let Some(r) = candidate_region {
             let region: PhysMemRegion = r.into();
-            let region_base = region.base() as usize;
-            let region_size = region.size() as usize;
-
-            state.base = region_base;
+            let region_base = region.span().base();
+            let region_size = region.span().size();
 
             // For sanity's sake, align base to 16 bytes
             let padding = round_addr(region_base, 16) - region_base;
@@ -217,9 +282,11 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
             let new_size = (region_size - padding) as usize;
 
             // Store aligned head and adjusted region size
-            state.head = new_head;
-            state.remaining = new_size;
-            state.phys_mem_layout = Some(phys_mem_layout);
+            *inner = Some(BumpAllocatorState {
+                phys_mem_layout,
+                logical_mem_layout,
+                current_arena: RegionSpan::new(new_head, new_size),
+            });
         } else {
             return Err(GenericError::ErrorMessage(
                 "no suitable region for allocator base was found",
@@ -229,7 +296,7 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
         // 4. Perform sanity check
         // - the base should NEVER be equal to zero, as we have
         //   been searching look
-        if state.base == 0 || state.head == 0 || state.remaining == 0 {
+        if inner.is_none() {
             return Err(GenericError::ErrorMessage(
                 "no changes were made to the allocator state",
             ));
@@ -243,112 +310,68 @@ impl<T: Into<PhysMemRegion> + Copy + 'static> BumpAllocator<T> {
 // TODO: use our novel "memory region descriptors", so that we
 //       don't need to know what "low memory area" is
 unsafe impl<T: Into<PhysMemRegion> + Copy + 'static> GlobalAlloc for BumpAllocator<T> {
+    /*
+        Bump allocation with optional arena relocation
+    */
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // Obtain handle to inner state
-        let mut state = self.state.lock();
+        // 0. Obtain handle to inner state
+        let mut inner = self.state.lock();
 
-        // Do not proceed if the allocator has not been initialized
-        if state.phys_mem_layout.is_none() || state.logical_mem_layout.is_none() {
+        // - do not proceed if the allocator has not been initialized
+        if inner.is_none() {
             return null_mut();
         }
 
-        // Unwrap the maybe-references
-        let phys_mem_layout = state.phys_mem_layout.unwrap();
-        let logical_mem_layout = state.logical_mem_layout.unwrap();
+        // - unwrap inner state
+        let state = inner.as_mut().unwrap();
+
+        /* 1. Handle requested layout */
+
+        // Keep track of the old head
+        let mut old_head = state.current_arena.base();
 
         // Obtain requested region size and alignment
         let req_size = layout.size();
         let req_align = layout.align();
 
         // Calculate aligned head
-        let mut req_head = round_addr(state.head, req_align);
+        let mut req_head = round_addr(old_head, req_align);
+        let mut padding = req_head - old_head;
 
         // - since zero-size allocations are allowed, handle it
         if req_size == 0 {
             return req_head as *mut u8;
         }
 
-        // Keep track of the old head
-        // - `self.head` should be greater
-        //    than the old head on success
-        let old_head = state.head;
+        /* 2. Perform optional arena relocation */
 
-        // First-pass heuristic:
         // Can we still allocate within the current region,
         // subject to alignment requirements?
-        let padding = req_head - old_head;
-        if req_size + padding < state.remaining {
-            // If so, EASY! perform a trivial "bump"
-            state.remaining -= req_size + padding;
-            state.head = req_head + req_size;
-            return req_head as *mut u8;
-        }
-
-        // If not through each entry, ruling out regions
-        // that
-        // - are clearly unusable
-        // - are clearly below the current base
-        // - are split between "usable" and "non-usable"
-        for &e in phys_mem_layout {
-            let entry: PhysMemRegion = e.into();
-
-            // Memory region properties
-            let mem_base = entry.base() as usize;
-            let mem_size = entry.size() as usize;
-            let mem_end = mem_base + mem_size;
-            let mem_pad = round_addr(mem_base, req_align) - mem_base;
-
-            // - rule out those that overlap with the boot image
-            if logical_mem_layout.iter().any(|r| entry.overlaps(r)) {
-                continue;
-            }
-
-            // - rule out "past" regions
-            if mem_base < state.base {
-                continue;
-            }
-
-            // - rule out regions that are clearly unusable
-            if mem_size <= req_size + mem_pad || !entry.kind().is_usable() {
-                continue;
-            }
-
-            // - if the requested region is clearly below
-            //   the current memory region, then use the
-            //   memory region's base as the candidate base,
-            //   subject to alignment requirements
-            if req_head + req_size < mem_base {
-                // - store region base
-                state.base = mem_base;
-
-                // - calculate new candidate base
-                req_head = mem_base + mem_pad;
-
-                // - calculate new capacity
-                state.remaining = mem_size - mem_pad;
-            }
-
-            // - if the requested region is clearly contained
-            //   within the current memory region, then
-            //   we're done here; we can simply "bump" the
-            //   base by the requested size + padding
-            if req_head >= mem_base && mem_end >= req_head + req_size {
-                // Bump base and capacity
-                // FIXME: potential correctness issue here
-                state.head = req_head + req_size;
-                state.remaining -= req_size + mem_pad;
-                break;
+        // - if not, locate new region
+        if state.current_arena.size() < req_size + padding {
+            if state.locate_new_arena(req_size, req_align).is_err() {
+                // - if a new arena couldn't be located, return NULL
+                return null_mut();
             }
         }
 
-        // Return candidate base only if `self.base`
-        // has changed values. Otherwise, return
-        // a null pointer.
-        if state.head > old_head {
-            req_head as *mut u8
-        } else {
-            null_mut()
-        }
+        /* 3. Perform classic bump allocation */
+
+        // Re-calculate request parameters, in case the arena has relocated
+        old_head = state.current_arena.base();
+        req_head = round_addr(old_head, req_align);
+        padding = req_head - old_head;
+
+        // Perform a trivial bump within the current arena
+        let new_remaining = state.current_arena.size() - (req_size + padding);
+        let new_head = req_head + req_size;
+
+        // - instead of changing the fields in-place,
+        //   store a new instance
+        state.current_arena = RegionSpan::new(new_head, new_remaining);
+
+        // - return pointer to requested head
+        return req_head as *mut u8;
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
