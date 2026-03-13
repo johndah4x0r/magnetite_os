@@ -105,14 +105,11 @@ OFFSET_PML4         equ 0
 ; - location of PDP table (huge)
 OFFSET_PDPT         equ OFFSET_PML4 + SIZEOF_PT
 
-; - location of low page directory table (large)
-OFFSET_PDTL         equ OFFSET_PDPT + SIZEOF_PT
-
-; - location of high page directory table
-OFFSET_PDTH         equ OFFSET_PDTL + SIZEOF_PT
+; - location of lowest page directory table (large)
+OFFSET_PDT0         equ OFFSET_PDPT + SIZEOF_PT
 
 ; - size of the bootstrap paging hierarchy
-SIZEOF_PTS          equ OFFSET_PDTH + SIZEOF_PT - OFFSET_PML4
+SIZEOF_PTS          equ OFFSET_PDT0 + 4 * SIZEOF_PT - OFFSET_PML4
 
 ; Page masks and flags
 PT_ADDR_MASK        equ 0xffffffffff000 ; Mask to align addresses to 4 kiB
